@@ -43,8 +43,6 @@ library(data.table)
 library(dplyr)
 
 
-# 5) Read your annotation with Marker info
-ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
 
 # 1) load train_data once so we can build the recipe
 train_data     <- read.delim("final_BIH_train_data.txt")
@@ -570,7 +568,9 @@ server <- function(input, output, session) {
     
     # 1) grab your marker CpGs
     # 1) figure out which CpGs belong to this marker
-   
+    # 5) Read your annotation with Marker info
+    ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
+    
     probes_for_marker <- ann450K %>% filter(Marker == marker)
     if (nrow(probes_for_marker) == 0) {
       showNotification("No CpG probes found for that marker.", type = "error")
@@ -677,6 +677,8 @@ server <- function(input, output, session) {
       celltype    <- input$celltype
       sample_name <- input$sample
       gene_name   <- toupper(input$gene_input)
+      # 5) Read your annotation with Marker info
+      ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
       
       ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
       probes_for_gene <- ann450K %>%
