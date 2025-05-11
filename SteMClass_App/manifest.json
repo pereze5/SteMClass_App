@@ -190,7 +190,7 @@
     },
     "BiocParallel": {
       "Source": "Bioconductor",
-      "Repository": "https://bioconductor.org/packages/3.20/bioc",
+      "Repository": "https://bioconductor.org/packages/3.18/bioc",
       "description": {
         "Package": "BiocParallel",
         "Type": "Package",
