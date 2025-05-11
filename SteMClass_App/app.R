@@ -36,17 +36,43 @@ library(data.table)
 options(shiny.maxRequestSize = 30*1024^2)
 
 # Load the trained model, training means, and CpG annotation table
-#load("SteMClass_model.RData")
-#load("training_means.RData")      # This loads mean values (assumed name: training_means)
+# ==== File preparation ====
+data_dir <- "data"
+if (!dir.exists(data_dir)) dir.create(data_dir)
 
+# List of required files and their download URLs
+files_to_download <- list(
+  "final_rf_fit_no_cal.rds"                      = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-final_rf_fit_no_cal.rds",
+  "final_BIH_train_targets.txt"                 = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-final_BIH_train_targets.txt",
+  "final_BIH_train_data.txt"                    = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-final_BIH_train_data.txt",
+  "CpG_450k_annotation_with_top10k_marker.txt"  = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-CpG_450k_annotation_with_top10k_marker.txt",
+  "SteMClass_refset.h5"                         = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-SteMClass_refset.h5"
+)
 
-sample_anno<-fread("final_BIH_train_targets.txt")
-sample_anno$Class<-as.factor(sample_anno$Class_rf)
+# Download files if missing
+for (file_name in names(files_to_download)) {
+  dest_path <- file.path(data_dir, file_name)
+  if (!file.exists(dest_path)) {
+    tryCatch({
+      message(paste("Downloading:", file_name))
+      download.file(files_to_download[[file_name]], destfile = dest_path, mode = "wb")
+    }, error = function(e) {
+      stop(paste("Failed to download", file_name, ":", e$message))
+    })
+  }
+}
 
-# 1) load train_data once so we can build the recipe
-train_data     <- read.delim("final_BIH_train_data.txt")
+# ==== Load data ====
+sample_anno <- fread(file.path(data_dir, "final_BIH_train_targets.txt"))
+sample_anno$Class <- as.factor(sample_anno$Class_rf)
+
+train_data <- read.delim(file.path(data_dir, "final_BIH_train_data.txt"))
 train_data$Class <- factor(train_data$Class_rf)
-train_data<- train_data[,-10001]
+train_data <- train_data[, -10001]  # assuming this is to drop the Class_rf column
+
+# Path to model
+rf_fit_path <- file.path(data_dir, "final_rf_fit_no_cal.rds")
+
 # 2) our imputation recipe exactly as in model development
 rf_recipe    <- recipe(Class~ ., data = train_data) %>%
   step_impute_median(all_predictors())
@@ -55,7 +81,7 @@ rf_recipe    <- recipe(Class~ ., data = train_data) %>%
 prepped_rec  <- prep(rf_recipe, training = train_data, retain = TRUE)
 
 # 4) model path and prob‐cols for prediction
-dest_class <- "final_rf_fit_no_cal.rds"
+dest_class <- file.path(data_dir, "SteMClass_refset.h5")
 url_class <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-final_rf_fit_no_cal.rds"  # replace with real file ID
 
 # Download the file if it's not already present
@@ -374,7 +400,7 @@ server <- function(input, output, session) {
       incProgress(0.4, detail = "Predicting…")
       pred_df <- predict_raw(
         new_data    = baked,
-        rf_fit_path = rf_fit_path,
+        rf_fit_path = dest_class,
         threshold   = 0.6
       )
       
@@ -578,7 +604,7 @@ server <- function(input, output, session) {
     # 1) figure out which CpGs belong to this marker
     # 5) Read your annotation with Marker info
     #ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
-    dest_anno <- "CpG_450k_annotation_with_top10k_marker.txt"
+    dest_anno <- file.path(data_dir, "CpG_450k_annotation_with_top10k_marker.txt")
     url_anno <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-CpG_450k_annotation_with_top10k_marker.txt"  # replace with real file ID
     
     # Download the file if it's not already present
@@ -623,7 +649,7 @@ server <- function(input, output, session) {
       showNotification("None of those CpGs are in the HDF5.", type = "error")
       return(NULL)
     }
-    beta_values_ref <- h5read(h5_file, "betaValues",
+    beta_values_ref <- h5read(dest, "betaValues",
                               index = list(NULL, cpg_indices))
     beta_values_ref <- t(beta_values_ref)
     rownames(beta_values_ref) <- cpg_ids
@@ -747,7 +773,7 @@ server <- function(input, output, session) {
         return(NULL)
       }
       
-      beta_values <- h5read(h5_file, "betaValues", index = list(NULL, cpg_indices))
+      beta_values <- h5read(dest, "betaValues", index = list(NULL, cpg_indices))
       beta_values <- t(beta_values)
       rownames(beta_values) <- cpg_ids
       colnames(beta_values) <- sample_ids
