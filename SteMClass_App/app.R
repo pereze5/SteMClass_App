@@ -1,5 +1,4 @@
 
-#.libPaths("C:/Program Files/R/R-4.4.3/library")
 library(tidymodels)
 library(methylumi)
 library(shiny)
@@ -25,7 +24,7 @@ library(ComplexHeatmap)
 library(circlize)     # For colorRamp2 function used in heatmap
 library(cachem)
 library(shinycssloaders)
-
+library(data.table)
 
 options(shiny.maxRequestSize = 30*1024^2)
 
@@ -37,12 +36,13 @@ options(shiny.maxRequestSize = 30*1024^2)
 sample_anno<-fread("final_BIH_train_targets.txt")
 sample_anno$Class<-as.factor(sample_anno$Class_rf)
 
-# Load the HDF5 file path
-h5_path <-"SteMClass_refset.h5"
-library(data.table)
-library(dplyr)
 
 
+
+# Ensure the "data" directory exists
+if (!dir.exists("data")) {
+  dir.create("data")
+}
 
 # 1) load train_data once so we can build the recipe
 train_data     <- read.delim("final_BIH_train_data.txt")
@@ -56,13 +56,22 @@ rf_recipe    <- recipe(Class~ ., data = train_data) %>%
 prepped_rec  <- prep(rf_recipe, training = train_data, retain = TRUE)
 
 # 4) model path and prob‐cols for prediction
-rf_fit_path  <- "final_rf_fit_no_cal.rds"
+dest_class <- "data/final_rf_fit_no_cal.rds"
+url_class <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds"  # replace with real file ID
+
+# Download the file if it's not already present
+if (!file.exists(dest_class)) {
+  message("Downloading data...")
+  download.file(url_class, dest_class, mode = "wb")
+}
+
+
 prob_cols    <- c("Astrocyte","Ectoderm","Endoderm",
                   "Endothelial","iPSC","Lung",
                   "Mesoderm","NSC")
 
 predict_raw <- function(new_data,
-                        rf_fit_path = "final_rf_fit_no_cal.rds",
+                        rf_fit_path = dest_class,
                         threshold   = 0.6) {
   # 1) load model
   final_rf <- readRDS(rf_fit_path)
@@ -569,8 +578,18 @@ server <- function(input, output, session) {
     # 1) grab your marker CpGs
     # 1) figure out which CpGs belong to this marker
     # 5) Read your annotation with Marker info
-    ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
+    #ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
+    dest_anno <- "data/CpG_450k_annotation_with_top10k_marker.txt"
+    url_anno <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt"  # replace with real file ID
     
+    # Download the file if it's not already present
+    if (!file.exists(dest_anno)) {
+      message("Downloading data...")
+      download.file(url_anno, dest_anno, mode = "wb")
+    }
+    
+    # Load the data
+    ann450K <- fread(dest_anno)
     probes_for_marker <- ann450K %>% filter(Marker == marker)
     if (nrow(probes_for_marker) == 0) {
       showNotification("No CpG probes found for that marker.", type = "error")
@@ -579,16 +598,21 @@ server <- function(input, output, session) {
     cpg_ids <- probes_for_marker$Name
     
     # 2) open & read HDF5
+    dest <- "data/SteMClass_refset.h5"
+    url <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.h5"  # replace with real file ID
     
-    h5_file <- h5_path
-    if (!file.exists(h5_file)) {
-      showNotification("Beta values file not found.", type = "error")
-      return(NULL)
+    # Download the file if it's not already present
+    if (!file.exists(dest)) {
+      message("Downloading data...")
+      download.file(url, dest, mode = "wb")
     }
-    h5f <- H5Fopen(h5_file)
+    
+    # Load the data
+    h5f <- H5Fopen(dest)
     sample_ids        <- h5read(h5f, "sampleIDs")
     probe_ids_in_file <- h5read(h5f, "probeIDs")
     H5Fclose(h5f)
+    
     
     # map & subset
     
@@ -678,8 +702,18 @@ server <- function(input, output, session) {
       sample_name <- input$sample
       gene_name   <- toupper(input$gene_input)
       # 5) Read your annotation with Marker info
-      ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
+      #ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
+      dest_anno <- "data/CpG_450k_annotation_with_top10k_marker.txt"
+      url_anno <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt"  # replace with real file ID
       
+      # Download the file if it's not already present
+      if (!file.exists(dest_anno)) {
+        message("Downloading data...")
+        download.file(url_anno, dest_anno, mode = "wb")
+      }
+      
+      # Load the data
+      ann450K <- fread(dest_anno)
       ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
       probes_for_gene <- ann450K %>%
         filter(UCSC_RefGene_Name == gene_name) %>%
@@ -693,12 +727,14 @@ server <- function(input, output, session) {
       
       # 2) read from HDF5
       incProgress(0.3, detail = "Reading beta values from HDF5…")
-      h5_file <- h5_path
-      if (!file.exists(h5_file)) {
-        showNotification("Beta values file not found.", type = "error")
-        return(NULL)
+      # Download the file if it's not already present
+      if (!file.exists(dest)) {
+        message("Downloading data...")
+        download.file(url, dest, mode = "wb")
       }
-      h5f <- H5Fopen(h5_file)
+      
+      # Load the data
+      h5f <- H5Fopen(dest)
       sample_ids        <- h5read(h5f, "sampleIDs")
       probe_ids_in_file <- h5read(h5f, "probeIDs")
       H5Fclose(h5f)
