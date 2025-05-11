@@ -3,7 +3,7 @@
     "version": "4.4.2"
   },
   "Bioconductor": {
-    "version": "3.20"
+    "version": "3.18"
   },
   "Packages": {
     "tidymodels": "1.3.0",
