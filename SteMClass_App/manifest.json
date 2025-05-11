@@ -190,7 +190,7 @@
     },
     "BiocParallel": {
       "Source": "Bioconductor",
-      "Repository": "https://bioconductor.org/packages/3.18/bioc",
+      "Repository": "https://bioconductor.org/packages/3.20/bioc",
       "description": {
         "Package": "BiocParallel",
         "Type": "Package",
@@ -3195,10 +3195,10 @@
       "Repository": "https://cran.rstudio.com",
       "description": {
         "Package": "future",
-        "Version": "1.40.0",
+        "Version": "1.49.0",
         "Title": "Unified Parallel and Distributed Processing in R for Everyone",
         "Depends": "R (>= 3.2.0)",
-        "Imports": "digest, globals (>= 0.16.1), listenv (>= 0.8.0), parallel,\nparallelly (>= 1.43.0), utils",
+        "Imports": "digest, globals (>= 0.18.0), listenv (>= 0.8.0), parallel,\nparallelly (>= 1.44.0), utils",
         "Suggests": "methods, RhpcBLASctl, R.rsp, markdown",
         "VignetteBuilder": "R.rsp",
         "Authors@R": "c(person(\"Henrik\", \"Bengtsson\",\n                    role = c(\"aut\", \"cre\", \"cph\"),\n                    email = \"henrikb@braju.com\",\n                    comment = c(ORCID = \"0000-0002-7579-5165\")))",
@@ -3208,15 +3208,16 @@
         "ByteCompile": "TRUE",
         "URL": "https://future.futureverse.org,\nhttps://github.com/futureverse/future",
         "BugReports": "https://github.com/futureverse/future/issues",
+        "Language": "en-US",
         "Encoding": "UTF-8",
         "RoxygenNote": "7.3.2",
         "NeedsCompilation": "no",
-        "Packaged": "2025-04-10 06:33:58 UTC; henrik",
-        "Author": "Henrik Bengtsson [aut, cre, cph]\n    (<https://orcid.org/0000-0002-7579-5165>)",
+        "Packaged": "2025-05-08 23:20:19 UTC; henrik",
+        "Author": "Henrik Bengtsson [aut, cre, cph] (ORCID:\n    <https://orcid.org/0000-0002-7579-5165>)",
         "Maintainer": "Henrik Bengtsson <henrikb@braju.com>",
         "Repository": "CRAN",
-        "Date/Publication": "2025-04-10 08:40:08 UTC",
-        "Built": "R 4.4.3; ; 2025-05-04 01:16:47 UTC; windows"
+        "Date/Publication": "2025-05-09 03:20:07 UTC",
+        "Built": "R 4.4.2; ; 2025-05-11 13:03:13 UTC; windows"
       }
     },
     "future.apply": {
@@ -3283,26 +3284,26 @@
       "description": {
         "Package": "generics",
         "Title": "Common S3 Generics not Provided by Base R Methods Related to\nModel Fitting",
-        "Version": "0.1.3",
-        "Authors@R": "c(\n    person(\"Hadley\", \"Wickham\", , \"hadley@rstudio.com\", role = c(\"aut\", \"cre\")),\n    person(\"Max\", \"Kuhn\", , \"max@rstudio.com\", role = \"aut\"),\n    person(\"Davis\", \"Vaughan\", , \"davis@rstudio.com\", role = \"aut\"),\n    person(\"RStudio\", role = \"cph\")\n  )",
+        "Version": "0.1.4",
+        "Authors@R": "c(\n    person(\"Hadley\", \"Wickham\", , \"hadley@posit.co\", role = c(\"aut\", \"cre\"),\n           comment = c(ORCID = \"0000-0003-4757-117X\")),\n    person(\"Max\", \"Kuhn\", , \"max@posit.co\", role = \"aut\"),\n    person(\"Davis\", \"Vaughan\", , \"davis@posit.co\", role = \"aut\"),\n    person(\"Posit Software, PBC\", role = c(\"cph\", \"fnd\"),\n           comment = c(ROR = \"https://ror.org/03wc8by49\"))\n  )",
         "Description": "In order to reduce potential package dependencies and\n    conflicts, generics provides a number of commonly used S3 generics.",
         "License": "MIT + file LICENSE",
         "URL": "https://generics.r-lib.org, https://github.com/r-lib/generics",
         "BugReports": "https://github.com/r-lib/generics/issues",
-        "Depends": "R (>= 3.2)",
+        "Depends": "R (>= 3.6)",
         "Imports": "methods",
         "Suggests": "covr, pkgload, testthat (>= 3.0.0), tibble, withr",
         "Config/Needs/website": "tidyverse/tidytemplate",
         "Config/testthat/edition": "3",
         "Encoding": "UTF-8",
-        "RoxygenNote": "7.2.0",
+        "RoxygenNote": "7.3.2",
         "NeedsCompilation": "no",
-        "Packaged": "2022-07-05 14:52:13 UTC; davis",
-        "Author": "Hadley Wickham [aut, cre],\n  Max Kuhn [aut],\n  Davis Vaughan [aut],\n  RStudio [cph]",
-        "Maintainer": "Hadley Wickham <hadley@rstudio.com>",
+        "Packaged": "2025-05-09 18:17:41 UTC; hadleywickham",
+        "Author": "Hadley Wickham [aut, cre] (ORCID:\n    <https://orcid.org/0000-0003-4757-117X>),\n  Max Kuhn [aut],\n  Davis Vaughan [aut],\n  Posit Software, PBC [cph, fnd] (ROR: <https://ror.org/03wc8by49>)",
+        "Maintainer": "Hadley Wickham <hadley@posit.co>",
         "Repository": "CRAN",
-        "Date/Publication": "2022-07-05 19:40:02 UTC",
-        "Built": "R 4.4.2; ; 2024-11-19 01:48:50 UTC; windows"
+        "Date/Publication": "2025-05-09 23:50:06 UTC",
+        "Built": "R 4.4.2; ; 2025-05-11 12:51:20 UTC; windows"
       }
     },
     "ggplot2": {
@@ -3342,25 +3343,27 @@
       "Repository": "https://cran.rstudio.com",
       "description": {
         "Package": "globals",
-        "Version": "0.17.0",
+        "Version": "0.18.0",
         "Depends": "R (>= 3.1.2)",
         "Imports": "codetools",
         "Title": "Identify Global Objects in R Expressions",
         "Authors@R": "c(\n    person(\"Henrik\", \"Bengtsson\", role=c(\"aut\", \"cre\", \"cph\"),\n           email=\"henrikb@braju.com\"),\n    person(\"Davis\",\"Vaughan\", role=\"ctb\",\n           email=\"davis@posit.co\"))",
-        "Description": "Identifies global (\"unknown\" or \"free\") objects in R expressions\n    by code inspection using various strategies (ordered, liberal, or\n    conservative).  The objective of this package is to make it as simple as\n    possible to identify global objects for the purpose of exporting them in\n    parallel, distributed compute environments.",
+        "Description": "Identifies global (\"unknown\" or \"free\") objects in R expressions\n    by code inspection using various strategies (ordered, liberal,\n    conservative, or deep-first search). The objective of this package is to\n    make it as simple as possible to identify global objects for the purpose\n    of exporting them in parallel, distributed compute environments.",
         "License": "LGPL (>= 2.1)",
         "LazyLoad": "TRUE",
         "ByteCompile": "TRUE",
+        "Language": "en-US",
+        "Encoding": "UTF-8",
         "URL": "https://globals.futureverse.org,\nhttps://github.com/futureverse/globals",
         "BugReports": "https://github.com/futureverse/globals/issues",
         "RoxygenNote": "7.3.2",
         "NeedsCompilation": "no",
-        "Packaged": "2025-04-16 05:11:12 UTC; henrik",
+        "Packaged": "2025-05-08 08:30:29 UTC; henrik",
         "Author": "Henrik Bengtsson [aut, cre, cph],\n  Davis Vaughan [ctb]",
         "Maintainer": "Henrik Bengtsson <henrikb@braju.com>",
         "Repository": "CRAN",
-        "Date/Publication": "2025-04-16 05:40:02 UTC",
-        "Built": "R 4.4.3; ; 2025-04-18 23:51:09 UTC; windows"
+        "Date/Publication": "2025-05-08 09:00:03 UTC",
+        "Built": "R 4.4.2; ; 2025-05-11 12:51:22 UTC; windows"
       }
     },
     "glue": {
@@ -4789,7 +4792,7 @@
       "Repository": "https://cran.rstudio.com",
       "description": {
         "Package": "parallelly",
-        "Version": "1.43.0",
+        "Version": "1.44.0",
         "Title": "Enhancing the 'parallel' Package",
         "Imports": "parallel, tools, utils",
         "Suggests": "commonmark, base64enc",
@@ -4804,12 +4807,12 @@
         "Encoding": "UTF-8",
         "RoxygenNote": "7.3.2",
         "NeedsCompilation": "yes",
-        "Packaged": "2025-03-24 07:55:02 UTC; henrik",
-        "Author": "Henrik Bengtsson [aut, cre, cph]\n    (<https://orcid.org/0000-0002-7579-5165>),\n  Mike Cheng [ctb]",
+        "Packaged": "2025-05-06 06:14:21 UTC; henrik",
+        "Author": "Henrik Bengtsson [aut, cre, cph] (ORCID:\n    <https://orcid.org/0000-0002-7579-5165>),\n  Mike Cheng [ctb]",
         "Maintainer": "Henrik Bengtsson <henrikb@braju.com>",
         "Repository": "CRAN",
-        "Date/Publication": "2025-03-24 08:40:02 UTC",
-        "Built": "R 4.4.3; x86_64-w64-mingw32; 2025-05-04 00:32:32 UTC; windows",
+        "Date/Publication": "2025-05-07 11:50:02 UTC",
+        "Built": "R 4.4.2; x86_64-w64-mingw32; 2025-05-11 13:02:42 UTC; windows",
         "Archs": "x64"
       }
     },
