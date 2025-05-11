@@ -42,11 +42,11 @@ if (!dir.exists(data_dir)) dir.create(data_dir)
 
 # List of required files and their download URLs
 files_to_download <- list(
-  "final_rf_fit_no_cal.rds"                      = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-final_rf_fit_no_cal.rds",
-  "final_BIH_train_targets.txt"                 = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-final_BIH_train_targets.txt",
-  "final_BIH_train_data.txt"                    = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-final_BIH_train_data.txt",
-  "CpG_450k_annotation_with_top10k_marker.txt"  = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-CpG_450k_annotation_with_top10k_marker.txt",
-  "SteMClass_refset.h5"                         = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-SteMClass_refset.h5"
+  "final_rf_fit_no_cal.rds"                      = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
+  "final_BIH_train_targets.txt"                 = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
+  "final_BIH_train_data.txt"                    = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
+  "CpG_450k_annotation_with_top10k_marker.txt"  = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
+  "SteMClass_refset.h5"                         = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.h5"
 )
 
 # Download files if missing
