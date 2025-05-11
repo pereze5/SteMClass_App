@@ -20,7 +20,9 @@ library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
 library(IlluminaHumanMethylationEPICmanifest)
 library(IlluminaHumanMethylationEPICv2manifest)
 library(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
-
+library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+library(IlluminaHumanMethylation450kmanifest)
+library(preprocessCore)
 library(minfi)        # For processing IDAT files
 library(ranger)
 library(stringr)
@@ -41,14 +43,6 @@ options(shiny.maxRequestSize = 30*1024^2)
 sample_anno<-fread("final_BIH_train_targets.txt")
 sample_anno$Class<-as.factor(sample_anno$Class_rf)
 
-
-
-
-# Ensure the "data" directory exists
-if (!dir.exists("data")) {
-  dir.create("data")
-}
-
 # 1) load train_data once so we can build the recipe
 train_data     <- read.delim("final_BIH_train_data.txt")
 train_data$Class <- factor(train_data$Class_rf)
@@ -61,8 +55,8 @@ rf_recipe    <- recipe(Class~ ., data = train_data) %>%
 prepped_rec  <- prep(rf_recipe, training = train_data, retain = TRUE)
 
 # 4) model path and prob‐cols for prediction
-dest_class <- "data/final_rf_fit_no_cal.rds"
-url_class <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds"  # replace with real file ID
+dest_class <- "final_rf_fit_no_cal.rds"
+url_class <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-final_rf_fit_no_cal.rds"  # replace with real file ID
 
 # Download the file if it's not already present
 if (!file.exists(dest_class)) {
@@ -584,8 +578,8 @@ server <- function(input, output, session) {
     # 1) figure out which CpGs belong to this marker
     # 5) Read your annotation with Marker info
     #ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
-    dest_anno <- "data/CpG_450k_annotation_with_top10k_marker.txt"
-    url_anno <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt"  # replace with real file ID
+    dest_anno <- "CpG_450k_annotation_with_top10k_marker.txt"
+    url_anno <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-CpG_450k_annotation_with_top10k_marker.txt"  # replace with real file ID
     
     # Download the file if it's not already present
     if (!file.exists(dest_anno)) {
@@ -603,8 +597,8 @@ server <- function(input, output, session) {
     cpg_ids <- probes_for_marker$Name
     
     # 2) open & read HDF5
-    dest <- "data/SteMClass_refset.h5"
-    url <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.h5"  # replace with real file ID
+    dest <- "SteMClass_refset.h5"
+    url <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-SteMClass_refset.h5"  # replace with real file ID
     
     # Download the file if it's not already present
     if (!file.exists(dest)) {
@@ -708,8 +702,8 @@ server <- function(input, output, session) {
       gene_name   <- toupper(input$gene_input)
       # 5) Read your annotation with Marker info
       #ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
-      dest_anno <- "data/CpG_450k_annotation_with_top10k_marker.txt"
-      url_anno <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt"  # replace with real file ID
+      dest_anno <- "CpG_450k_annotation_with_top10k_marker.txt"
+      url_anno <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-CpG_450k_annotation_with_top10k_marker.txt"  # replace with real file ID
       
       # Download the file if it's not already present
       if (!file.exists(dest_anno)) {

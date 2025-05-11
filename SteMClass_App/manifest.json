@@ -7273,20 +7273,11 @@
     "app.R": {
       "checksum": "79f133f1cde3045d69a076972a55d28c"
     },
-    "CpG_450k_annotation_with_top10k_marker.txt": {
-      "checksum": "ed31202211b846013445ea1343d3934f"
-    },
     "final_BIH_train_data.txt": {
       "checksum": "79c655fd47ccffa134dc93166f3fdfee"
     },
     "final_BIH_train_targets.txt": {
       "checksum": "d0e4e72b62cb156a807ecf679633e69d"
-    },
-    "final_rf_fit_no_cal.rds": {
-      "checksum": "669b045f1145abdec13d5c3d72ef5fda"
-    },
-    "SteMClass_refset.h5": {
-      "checksum": "7b9d68a4b3b3a627a4d3044c2f8c0492"
     }
   },
   "users": null
