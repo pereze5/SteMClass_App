@@ -15,6 +15,11 @@ library(dplyr)        # For data manipulation
 library(uwot)         # For UMAP computation
 library(RColorBrewer) # For color palettes
 library(data.table)   # For efficient data reading
+library(tidymodels)
+library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+library(IlluminaHumanMethylationEPICmanifest)
+library(IlluminaHumanMethylationEPICv2manifest)
+library(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
 
 library(minfi)        # For processing IDAT files
 library(ranger)

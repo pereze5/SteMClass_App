@@ -858,6 +858,122 @@
         "Built": "R 4.4.2; ; 2025-05-07 22:42:54 UTC; windows"
       }
     },
+    "IlluminaHumanMethylationEPICanno.ilm10b4.hg19": {
+      "Source": "Bioconductor",
+      "Repository": "https://bioconductor.org/packages/3.20/data/annotation",
+      "description": {
+        "Package": "IlluminaHumanMethylationEPICanno.ilm10b4.hg19",
+        "Version": "0.6.0",
+        "Title": "Annotation for Illumina's EPIC methylation arrays",
+        "Description": "An annotation package for Illumina's EPIC methylation arrays.",
+        "Authors@R": "c(person(c(\"Kasper\", \"Daniel\"), \"Hansen\", role = c(\"cre\", \"aut\"),\n                    email = \"kasperdanielhansen@gmail.com\"))",
+        "License": "Artistic-2.0",
+        "URL": "https://bitbucket.com/kasperdanielhansen/Illumina_EPIC",
+        "BugReports": "https://bitbucket.com/kasperdanielhansen/Illumina_EPIC/issues",
+        "Depends": "R (>= 3.3.0), minfi (>= 1.19.15)",
+        "LazyData": "yes",
+        "biocViews": "AnnotationData, IlluminaChip, Homo_sapiens",
+        "NeedsCompilation": "no",
+        "Packaged": "2017-10-19 14:02:18 UTC; da42327_ca",
+        "Author": "Kasper Daniel Hansen [cre, aut]",
+        "Maintainer": "Kasper Daniel Hansen <kasperdanielhansen@gmail.com>",
+        "Built": "R 4.4.2; ; 2025-05-07 22:50:41 UTC; windows"
+      }
+    },
+    "IlluminaHumanMethylationEPICmanifest": {
+      "Source": "Bioconductor",
+      "Repository": "https://bioconductor.org/packages/3.20/data/annotation",
+      "description": {
+        "Package": "IlluminaHumanMethylationEPICmanifest",
+        "Version": "0.3.0",
+        "Title": "Manifest for Illumina's EPIC methylation arrays",
+        "Description": "A manifest package for Illumina's EPIC methylation arrays.",
+        "Authors@R": "c(person(c(\"Kasper\", \"Daniel\"), \"Hansen\", role = c(\"cre\", \"aut\"),\n                    email = \"kasperdanielhansen@gmail.com\"))",
+        "License": "Artistic-2.0",
+        "URL": "https://bitbucket.com/kasperdanielhansen/Illumina_EPIC",
+        "BugReports": "https://bitbucket.com/kasperdanielhansen/Illumina_EPIC/issues",
+        "Depends": "R (>= 3.2.0), minfi",
+        "LazyData": "yes",
+        "biocViews": "IlluminaChip, Homo_sapiens, DNAMethylation",
+        "NeedsCompilation": "no",
+        "Packaged": "2016-03-20 19:46:38 UTC; khansen",
+        "Author": "Kasper Daniel Hansen [cre, aut]",
+        "Maintainer": "Kasper Daniel Hansen <kasperdanielhansen@gmail.com>",
+        "Built": "R 4.4.2; ; 2025-05-07 22:48:02 UTC; windows"
+      }
+    },
+    "IlluminaHumanMethylationEPICv2anno.20a1.hg38": {
+      "Source": "github",
+      "Repository": null,
+      "description": {
+        "Package": "IlluminaHumanMethylationEPICv2anno.20a1.hg38",
+        "Version": "1.0.0",
+        "Date": "2024-03-26",
+        "Title": "Annotation for Illumina's EPIC v2.0 methylation arrays",
+        "Description": "An annotation package for Illumina's EPIC v2.0 methylation arrays. The version\n   2 covers more than 935K CpG sites in the human genome hg38. It is an update of\n   the original EPIC v1.0 array (i.e., the 850K methylation array).",
+        "Authors@R": "person(\"Zuguang\", \"Gu\", email = \"z.gu@dkfz.de\", role = c(\"aut\", \"cre\"),\n                  comment = c('ORCID'=\"0000-0002-7395-8709\"))",
+        "License": "Artistic-2.0",
+        "Depends": "R (>= 4.2.0), minfi",
+        "Imports": "utils",
+        "Suggests": "knitr, IlluminaHumanMethylationEPICanno.ilm10b4.hg19",
+        "URL": "https://www.illumina.com/products/by-type/microarray-kits/infinium-methylation-epic.html",
+        "VignetteBuilder": "knitr",
+        "biocViews": "AnnotationData, IlluminaChip, Homo_sapiens",
+        "LazyData": "yes",
+        "LazyDataCompression": "xz",
+        "RemoteType": "github",
+        "RemoteHost": "api.github.com",
+        "RemoteRepo": "IlluminaHumanMethylationEPICv2anno.20a1.hg38",
+        "RemoteUsername": "jokergoo",
+        "RemoteRef": "HEAD",
+        "RemoteSha": "702e52acb8268353bd8c753e67a2096c565f9782",
+        "GithubRepo": "IlluminaHumanMethylationEPICv2anno.20a1.hg38",
+        "GithubUsername": "jokergoo",
+        "GithubRef": "HEAD",
+        "GithubSHA1": "702e52acb8268353bd8c753e67a2096c565f9782",
+        "NeedsCompilation": "no",
+        "Packaged": "2025-05-11 14:41:04 UTC; eilis",
+        "Author": "Zuguang Gu [aut, cre] (<https://orcid.org/0000-0002-7395-8709>)",
+        "Maintainer": "Zuguang Gu <z.gu@dkfz.de>",
+        "Built": "R 4.4.2; ; 2025-05-11 14:41:15 UTC; windows"
+      }
+    },
+    "IlluminaHumanMethylationEPICv2manifest": {
+      "Source": "github",
+      "Repository": null,
+      "description": {
+        "Package": "IlluminaHumanMethylationEPICv2manifest",
+        "Version": "1.0.0",
+        "Date": "2024-03-26",
+        "Title": "Manifest for Illumina's EPIC v2.0 methylation arrays",
+        "Description": "A manifest package for Illumina's EPIC v2.0 methylation arrays. The version\n   2 covers more than 935K CpG sites in the human genome hg38. It is an update of\n   the original EPIC v1.0 array (i.e., the 850K methylation array).",
+        "Authors@R": "person(\"Zuguang\", \"Gu\", email = \"z.gu@dkfz.de\", role = c(\"aut\", \"cre\"),\n                  comment = c('ORCID'=\"0000-0002-7395-8709\"))",
+        "License": "Artistic-2.0",
+        "Depends": "R (>= 4.0.0), minfi",
+        "Imports": "utils",
+        "Suggests": "knitr, IlluminaHumanMethylationEPICmanifest, eulerr",
+        "URL": "https://www.illumina.com/products/by-type/microarray-kits/infinium-methylation-epic.html",
+        "VignetteBuilder": "knitr",
+        "biocViews": "AnnotationData, IlluminaChip, Homo_sapiens",
+        "LazyData": "yes",
+        "LazyDataCompression": "xz",
+        "RemoteType": "github",
+        "RemoteHost": "api.github.com",
+        "RemoteRepo": "IlluminaHumanMethylationEPICv2manifest",
+        "RemoteUsername": "jokergoo",
+        "RemoteRef": "HEAD",
+        "RemoteSha": "f1aa598c00e680f85114480e8214e178e248af21",
+        "GithubRepo": "IlluminaHumanMethylationEPICv2manifest",
+        "GithubUsername": "jokergoo",
+        "GithubRef": "HEAD",
+        "GithubSHA1": "f1aa598c00e680f85114480e8214e178e248af21",
+        "NeedsCompilation": "no",
+        "Packaged": "2025-05-11 14:38:14 UTC; eilis",
+        "Author": "Zuguang Gu [aut, cre] (<https://orcid.org/0000-0002-7395-8709>)",
+        "Maintainer": "Zuguang Gu <z.gu@dkfz.de>",
+        "Built": "R 4.4.2; ; 2025-05-11 14:38:15 UTC; windows"
+      }
+    },
     "KEGGREST": {
       "Source": "Bioconductor",
       "Repository": "https://bioconductor.org/packages/3.20/bioc",
@@ -7155,7 +7271,7 @@
   },
   "files": {
     "app.R": {
-      "checksum": "09588dd0837d1b80840d611981f4f74f"
+      "checksum": "79f133f1cde3045d69a076972a55d28c"
     },
     "CpG_450k_annotation_with_top10k_marker.txt": {
       "checksum": "ed31202211b846013445ea1343d3934f"
