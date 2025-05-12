@@ -3,6 +3,10 @@
 
 #options(shiny.maxRequestSize = 30*1024^2)
 
+library(shinyjs)
+library(thematic)     # For automatic theming of ggplot2 plots
+library(bslib)        # For Bootstrap theming
+library(shinycssloaders)
 # Load the trained model, training means, and CpG annotation table
 
 predict_raw <- function(new_data, threshold = 0.6) {
@@ -78,6 +82,7 @@ custom_css <- "
   background-color: #D55E00 !important;
 }
 "
+
 
 # Define the Shiny UI with the selected theme and custom CSS
 ui <- navbarPage(
@@ -221,11 +226,7 @@ server <- function(input, output, session) {
       )
       library(tidymodels)
       library(methylumi)
-      library(wateRmelon)  # Uncomment if epicv2clean() is provided by wateRmelon
-      library(methylumi)
-      library(shinyjs)
-      library(bslib)        # For Bootstrap theming
-      library(thematic)     # For automatic theming of ggplot2 plots
+      library(wateRmelon)  
       library(randomForest)
       library(DT)
       library(ggplot2)
@@ -248,8 +249,7 @@ server <- function(input, output, session) {
       library(ComplexHeatmap)
       library(circlize)     # For colorRamp2 function used in heatmap
       library(cachem)
-      library(shinycssloaders)
-      library(data.table)
+      
       rgSet <- read.metharray.exp(base = tmp, targets = targets)
       sampleNames(rgSet) <- targets$Sample_accession
       
