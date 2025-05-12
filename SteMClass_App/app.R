@@ -1,7 +1,7 @@
 
 library(tidymodels)
 library(methylumi)
-library(shiny)
+#library(shiny)
 library(wateRmelon)  # Uncomment if epicv2clean() is provided by wateRmelon
 library(methylumi)
 library(shinyjs)
@@ -32,9 +32,8 @@ library(circlize)     # For colorRamp2 function used in heatmap
 library(cachem)
 library(shinycssloaders)
 library(data.table)
-library(curl)
 
-options(shiny.maxRequestSize = 30*1024^2)
+#options(shiny.maxRequestSize = 30*1024^2)
 
 # Load the trained model, training means, and CpG annotation table
 # ==== Streamed file URLs ====
