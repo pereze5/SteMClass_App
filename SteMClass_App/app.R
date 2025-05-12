@@ -1,36 +1,5 @@
 
-library(tidymodels)
-library(methylumi)
-#library(shiny)
-library(wateRmelon)  # Uncomment if epicv2clean() is provided by wateRmelon
-library(methylumi)
-library(shinyjs)
-library(bslib)        # For Bootstrap theming
-library(thematic)     # For automatic theming of ggplot2 plots
-library(randomForest)
-library(DT)
-library(ggplot2)
-library(tidyr)
-library(dplyr)        # For data manipulation
-library(uwot)         # For UMAP computation
-library(RColorBrewer) # For color palettes
-library(data.table)   # For efficient data reading
-library(tidymodels)
-library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
-library(IlluminaHumanMethylationEPICmanifest)
-library(IlluminaHumanMethylationEPICv2manifest)
-library(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
-library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
-library(IlluminaHumanMethylation450kmanifest)
-library(preprocessCore)
-library(minfi)        # For processing IDAT files
-library(ranger)
-library(stringr)
-library(ComplexHeatmap)
-library(circlize)     # For colorRamp2 function used in heatmap
-library(cachem)
-library(shinycssloaders)
-library(data.table)
+
 
 #options(shiny.maxRequestSize = 30*1024^2)
 
@@ -250,6 +219,37 @@ server <- function(input, output, session) {
         Basename         = basename0,
         stringsAsFactors = FALSE
       )
+      library(tidymodels)
+      library(methylumi)
+      library(wateRmelon)  # Uncomment if epicv2clean() is provided by wateRmelon
+      library(methylumi)
+      library(shinyjs)
+      library(bslib)        # For Bootstrap theming
+      library(thematic)     # For automatic theming of ggplot2 plots
+      library(randomForest)
+      library(DT)
+      library(ggplot2)
+      library(tidyr)
+      library(dplyr)        # For data manipulation
+      library(uwot)         # For UMAP computation
+      library(RColorBrewer) # For color palettes
+      library(data.table)   # For efficient data reading
+      library(tidymodels)
+      library(IlluminaHumanMethylationEPICanno.ilm10b4.hg19)
+      library(IlluminaHumanMethylationEPICmanifest)
+      library(IlluminaHumanMethylationEPICv2manifest)
+      library(IlluminaHumanMethylationEPICv2anno.20a1.hg38)
+      library(IlluminaHumanMethylation450kanno.ilmn12.hg19)
+      library(IlluminaHumanMethylation450kmanifest)
+      library(preprocessCore)
+      library(minfi)        # For processing IDAT files
+      library(ranger)
+      library(stringr)
+      library(ComplexHeatmap)
+      library(circlize)     # For colorRamp2 function used in heatmap
+      library(cachem)
+      library(shinycssloaders)
+      library(data.table)
       rgSet <- read.metharray.exp(base = tmp, targets = targets)
       sampleNames(rgSet) <- targets$Sample_accession
       
