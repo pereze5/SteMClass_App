@@ -26,7 +26,6 @@ library(preprocessCore)
 library(minfi)        # For processing IDAT files
 library(ranger)
 library(stringr)
-library(rhdf5)
 library(ComplexHeatmap)
 library(circlize)     # For colorRamp2 function used in heatmap
 library(cachem)
