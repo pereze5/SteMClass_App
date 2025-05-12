@@ -858,6 +858,24 @@
         "Built": "R 4.4.2; ; 2025-05-07 22:42:54 UTC; windows"
       }
     },
+    "IlluminaHumanMethylation450kmanifest": {
+      "Source": "Bioconductor",
+      "Repository": "https://bioconductor.org/packages/3.20/data/annotation",
+      "description": {
+        "Package": "IlluminaHumanMethylation450kmanifest",
+        "Version": "0.4.0",
+        "Title": "Annotation for Illumina's 450k methylation arrays",
+        "Description": "Manifest for Illumina's 450k array data",
+        "Author": "Kasper Daniel Hansen, Martin Aryee",
+        "Maintainer": "Kasper Daniel Hansen <khansen@jhsph.edu>",
+        "License": "Artistic-2.0",
+        "Depends": "R (>= 2.13.0), minfi",
+        "LazyData": "yes",
+        "biocViews": "IlluminaChip, Homo_sapiens, DNAMethylation",
+        "Packaged": "2012-09-08 21:57:39 UTC; khansen",
+        "Built": "R 4.4.2; ; 2025-05-11 14:37:30 UTC; windows"
+      }
+    },
     "IlluminaHumanMethylationEPICanno.ilm10b4.hg19": {
       "Source": "Bioconductor",
       "Repository": "https://bioconductor.org/packages/3.20/data/annotation",
@@ -7271,13 +7289,7 @@
   },
   "files": {
     "app.R": {
-      "checksum": "79f133f1cde3045d69a076972a55d28c"
-    },
-    "final_BIH_train_data.txt": {
-      "checksum": "79c655fd47ccffa134dc93166f3fdfee"
-    },
-    "final_BIH_train_targets.txt": {
-      "checksum": "d0e4e72b62cb156a807ecf679633e69d"
+      "checksum": "8cb88ea3b3b3e9af0e5e230de4e5bbcc"
     }
   },
   "users": null

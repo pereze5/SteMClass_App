@@ -32,46 +32,39 @@ library(circlize)     # For colorRamp2 function used in heatmap
 library(cachem)
 library(shinycssloaders)
 library(data.table)
+library(curl)
 
 options(shiny.maxRequestSize = 30*1024^2)
 
 # Load the trained model, training means, and CpG annotation table
-# ==== File preparation ====
-data_dir <- "data"
-if (!dir.exists(data_dir)) dir.create(data_dir)
-
-# List of required files and their download URLs
-files_to_download <- list(
-  "final_rf_fit_no_cal.rds"                      = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
-  "final_BIH_train_targets.txt"                 = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
-  "final_BIH_train_data.txt"                    = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
-  "CpG_450k_annotation_with_top10k_marker.txt"  = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
-  "SteMClass_refset.h5"                         = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.h5"
+# ==== Streamed file URLs ====
+urls <- list(
+  model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
+  train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
+  train_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
+  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
+  ref_beta_rds = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.rds"
 )
 
-# Download files if missing
-for (file_name in names(files_to_download)) {
-  dest_path <- file.path(data_dir, file_name)
-  if (!file.exists(dest_path)) {
-    tryCatch({
-      message(paste("Downloading:", file_name))
-      download.file(files_to_download[[file_name]], destfile = dest_path, mode = "wb")
-    }, error = function(e) {
-      stop(paste("Failed to download", file_name, ":", e$message))
-    })
-  }
-}
 
-# ==== Load data ====
-sample_anno <- fread(file.path(data_dir, "final_BIH_train_targets.txt"))
+# ===== Read files directly into memory =====
+sample_anno <- data.table::fread(urls$train_anno)
 sample_anno$Class <- as.factor(sample_anno$Class_rf)
 
-train_data <- read.delim(file.path(data_dir, "final_BIH_train_data.txt"))
+train_data <- data.table::fread(urls$train_data)
 train_data$Class <- factor(train_data$Class_rf)
-train_data <- train_data[, -10001]  # assuming this is to drop the Class_rf column
+train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
 
-# Path to model
-rf_fit_path <- file.path(data_dir, "final_rf_fit_no_cal.rds")
+# Load model directly from URL
+rf_fit <- readRDS(url(urls$model))
+
+# Load CpG annotation
+ann450K <- data.table::fread(urls$cpg_anno)
+ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
+
+# Load reference beta matrix (row = CpGs, col = samples)
+ref_beta <- readRDS(url(urls$ref_beta_rds))
+
 
 # 2) our imputation recipe exactly as in model development
 rf_recipe    <- recipe(Class~ ., data = train_data) %>%
@@ -80,38 +73,20 @@ rf_recipe    <- recipe(Class~ ., data = train_data) %>%
 # 3) learn the medians
 prepped_rec  <- prep(rf_recipe, training = train_data, retain = TRUE)
 
-# 4) model path and prob‐cols for prediction
-dest_class <- file.path(data_dir, "SteMClass_refset.h5")
-url_class <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-final_rf_fit_no_cal.rds"  # replace with real file ID
-
-# Download the file if it's not already present
-if (!file.exists(dest_class)) {
-  message("Downloading data...")
-  download.file(url_class, dest_class, mode = "wb")
-}
-
-
 prob_cols    <- c("Astrocyte","Ectoderm","Endoderm",
                   "Endothelial","iPSC","Lung",
                   "Mesoderm","NSC")
 
-predict_raw <- function(new_data,
-                        rf_fit_path = dest_class,
-                        threshold   = 0.6) {
-  # 1) load model
-  final_rf <- readRDS(rf_fit_path)
+predict_raw <- function(new_data, threshold = 0.6) {
+  # 1) predict raw probabilities
+  raw_probs <- predict(rf_fit, new_data = new_data, type = "prob")
   
-  # 2) predict raw probabilities
-  raw_probs <- predict(final_rf, new_data = new_data, type = "prob")
-  
-  # 3) rename columns from .pred_Class → Class
+  # 2) rename columns from .pred_Class → Class
   raw_probs <- raw_probs %>%
     rename_with(~ str_remove(.x, "^\\.pred_"), starts_with(".pred_"))
   
-  # now prob_cols are exactly the class names
+  # 3) apply threshold logic
   prob_cols <- colnames(raw_probs)
-  
-  # 4) apply threshold logic
   out_df <- raw_probs %>%
     rowwise() %>%
     mutate(
@@ -123,7 +98,6 @@ predict_raw <- function(new_data,
       }
     ) %>%
     ungroup() %>%
-    # finally make it a factor
     mutate(pred_class = factor(pred_class, levels = c(prob_cols, "reject")))
   
   return(out_df)
@@ -400,7 +374,6 @@ server <- function(input, output, session) {
       incProgress(0.4, detail = "Predicting…")
       pred_df <- predict_raw(
         new_data    = baked,
-        rf_fit_path = dest_class,
         threshold   = 0.6
       )
       
@@ -437,7 +410,6 @@ server <- function(input, output, session) {
     predicted_class <- res$prediction    # already a character string
     
     # pull out the probability for that class:
-    # res$probabilities is a named list, so:
     prediction_score <- as.numeric(res$probabilities[[predicted_class]])
     
     paste0(
@@ -523,7 +495,7 @@ server <- function(input, output, session) {
           stop("Missing predictors in training data: ",
                paste(missing_train, collapse = ", "))
         }
-        train_features <- train_df[, feature_cols, drop = FALSE]
+        train_features <- train_df[, ..feature_cols]
         
         # 4) combine datasets
         incProgress(0.1, detail = "Combining data…")
@@ -603,57 +575,28 @@ server <- function(input, output, session) {
     # 1) grab your marker CpGs
     # 1) figure out which CpGs belong to this marker
     # 5) Read your annotation with Marker info
-    #ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
-    dest_anno <- file.path(data_dir, "CpG_450k_annotation_with_top10k_marker.txt")
-    url_anno <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-CpG_450k_annotation_with_top10k_marker.txt"  # replace with real file ID
-    
-    # Download the file if it's not already present
-    if (!file.exists(dest_anno)) {
-      message("Downloading data...")
-      download.file(url_anno, dest_anno, mode = "wb")
-    }
-    
-    # Load the data
-    ann450K <- fread(dest_anno)
+
     probes_for_marker <- ann450K %>% filter(Marker == marker)
     if (nrow(probes_for_marker) == 0) {
       showNotification("No CpG probes found for that marker.", type = "error")
       return(NULL)
     }
+    
     cpg_ids <- probes_for_marker$Name
     
-    # 2) open & read HDF5
-    dest <- "SteMClass_refset.h5"
-    url <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-SteMClass_refset.h5"  # replace with real file ID
     
-    # Download the file if it's not already present
-    if (!file.exists(dest)) {
-      message("Downloading data...")
-      download.file(url, dest, mode = "wb")
-    }
-    
-    # Load the data
-    h5f <- H5Fopen(dest)
-    sample_ids        <- h5read(h5f, "sampleIDs")
-    probe_ids_in_file <- h5read(h5f, "probeIDs")
-    H5Fclose(h5f)
-    
-    
-    # map & subset
-    
-    cpg_indices <- match(cpg_ids, probe_ids_in_file)
-    valid       <- which(!is.na(cpg_indices))
-    cpg_indices <- cpg_indices[valid]
-    cpg_ids     <- cpg_ids[valid]
-    if (length(cpg_indices) == 0) {
-      showNotification("None of those CpGs are in the HDF5.", type = "error")
+    # Filter to CpGs of interest in ref_beta
+    common_cpgs <- intersect(cpg_ids, intersect(rownames(ref_beta), colnames(beta_data())))
+    if (length(common_cpgs) == 0) {
+      showNotification("No shared CpGs found between reference and sample for this gene.", type = "error")
       return(NULL)
     }
-    beta_values_ref <- h5read(dest, "betaValues",
-                              index = list(NULL, cpg_indices))
-    beta_values_ref <- t(beta_values_ref)
-    rownames(beta_values_ref) <- cpg_ids
-    colnames(beta_values_ref) <- sample_ids
+    beta_values_ref <- ref_beta[common_cpgs, , drop = FALSE]
+    test_vec        <- beta_data()[, common_cpgs, drop = FALSE]
+    test_mat        <- t(test_vec)
+    rownames(test_mat) <- common_cpgs
+    colnames(test_mat) <- sample_name
+    
     
     # 3) bind test sample & build annotation
     
@@ -663,10 +606,6 @@ server <- function(input, output, session) {
     beta_values_ref  <- beta_values_ref[, keep_ref, drop = FALSE]
     ref_anno         <- ref_anno_full[keep_ref, ]
     
-    test_vec  <- beta_data()[, cpg_ids, drop = FALSE]
-    test_mat  <- t(test_vec)
-    rownames(test_mat) <- cpg_ids
-    colnames(test_mat) <- sample_name
     
     beta_values <- cbind(beta_values_ref, test_mat)
     
@@ -712,12 +651,9 @@ server <- function(input, output, session) {
     draw(hm, heatmap_legend_side="right", annotation_legend_side="right")
   }, height=500)
       
-
-
-  
   
   observeEvent(input$plot_button, {
-    req(beta_data(), input$sample)
+    req(beta_data(), input$sample, input$gene_input, input$celltype)
     
     withProgress(message = "Generating gene‐level heatmap", value = 0, {
       
@@ -726,20 +662,8 @@ server <- function(input, output, session) {
       celltype    <- input$celltype
       sample_name <- input$sample
       gene_name   <- toupper(input$gene_input)
-      # 5) Read your annotation with Marker info
-      #ann450K <- fread("CpG_450k_annotation_with_top10k_marker.txt") 
-      dest_anno <- "CpG_450k_annotation_with_top10k_marker.txt"
-      url_anno <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-CpG_450k_annotation_with_top10k_marker.txt"  # replace with real file ID
       
-      # Download the file if it's not already present
-      if (!file.exists(dest_anno)) {
-        message("Downloading data...")
-        download.file(url_anno, dest_anno, mode = "wb")
-      }
-      
-      # Load the data
-      ann450K <- fread(dest_anno)
-      ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
+      #prepare CpG annotation
       probes_for_gene <- ann450K %>%
         filter(UCSC_RefGene_Name == gene_name) %>%
         distinct(Name, .keep_all = TRUE) %>%
@@ -749,42 +673,23 @@ server <- function(input, output, session) {
         return(NULL)
       }
       cpg_ids <- probes_for_gene$Name
+
+      # 2) filter bvals
+      incProgress(0.3, detail = "Filtering beta values")
+      # Filter to CpGs of interest in ref_beta
       
-      # 2) read from HDF5
-      incProgress(0.3, detail = "Reading beta values from HDF5…")
-      # Download the file if it's not already present
-      if (!file.exists(dest)) {
-        message("Downloading data...")
-        download.file(url, dest, mode = "wb")
-      }
-      
-      # Load the data
-      h5f <- H5Fopen(dest)
-      sample_ids        <- h5read(h5f, "sampleIDs")
-      probe_ids_in_file <- h5read(h5f, "probeIDs")
-      H5Fclose(h5f)
-      
-      cpg_indices <- match(cpg_ids, probe_ids_in_file)
-      valid_idx   <- which(!is.na(cpg_indices))
-      cpg_indices <- cpg_indices[valid_idx]
-      cpg_ids     <- cpg_ids[valid_idx]
-      if (length(cpg_indices) == 0) {
-        showNotification("None of those CpGs are in the HDF5.", type = "error")
+      common_cpgs <- intersect(cpg_ids, intersect(rownames(ref_beta), colnames(beta_data())))
+      if (length(common_cpgs) == 0) {
+        showNotification("No shared CpGs found between reference and sample for this gene.", type = "error")
         return(NULL)
       }
-      
-      beta_values <- h5read(dest, "betaValues", index = list(NULL, cpg_indices))
-      beta_values <- t(beta_values)
-      rownames(beta_values) <- cpg_ids
-      colnames(beta_values) <- sample_ids
-      
-      # 3) bind test sample & filter samples
-      incProgress(0.2, detail = "Binding test sample & filtering…")
-      test_vec <- beta_data()[, cpg_ids, drop = FALSE]
-      test_mat <- t(test_vec)
-      rownames(test_mat) <- cpg_ids
+      beta_values_ref <- ref_beta[common_cpgs, , drop = FALSE]
+      test_vec        <- beta_data()[, common_cpgs, drop = FALSE]
+      test_mat        <- t(test_vec)
+      rownames(test_mat) <- common_cpgs
       colnames(test_mat) <- sample_name
-      beta_values <- cbind(beta_values, test_mat)
+      
+      beta_values <- cbind(beta_values_ref, test_mat)
       
       samp_anno_heatmap <- sample_anno[match(colnames(beta_values), sample_anno$Sample_accession), ]
       samp_anno_heatmap <- samp_anno_heatmap %>% 
