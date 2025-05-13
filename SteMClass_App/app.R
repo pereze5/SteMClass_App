@@ -286,27 +286,48 @@ server <- function(input, output, session) {
     updateTextInput(session, "sample", value = paste(rownames(beta_data()), "loaded"))
   })
   
+  # Reactive expression to wrap the train_data
+  training_data <- reactive({
+    # with rownames = sample IDs and a column "Class"
+    train_data <- data.table::fread(urls$train_data)
+    train_data$Class <- factor(train_data$Class_rf)
+    train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
+    if (!"Class" %in% colnames(train_data)) {
+      stop("Global train_data must contain a column named 'Class'")
+    }
+    train_data
+  })
+  
+  
+  # Reactive expression to wrap the reference beta matrix
+  ref_beta <- reactive({
+    # with rownames = sample IDs and a column "Class"
+    ref_beta <- readRDS(url(urls$ref_beta_rds))
+    ref_beta
+  })
+  
+  # Reactive expression to wrap the CpG anno
+  ann450K <- reactive({
+    ann450K <- data.table::fread(urls$cpg_anno)
+    ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
+    ann450K
+  })
+  
   classification <- eventReactive(input$classify, {
-    req(beta_data())
+    req(beta_data(), training_data())
     
     withProgress(message = "Running classification", value = 0, {
       # ===== Read files directly into memory =====
       sample_anno <- data.table::fread(urls$train_anno)
       sample_anno$Class <- as.factor(sample_anno$Class_rf)
       
-      train_data <- data.table::fread(urls$train_data)
-      train_data$Class <- factor(train_data$Class_rf)
-      train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
+      train_data <- training_data()
       
       # Load model directly from URL
       rf_fit <- readRDS(url(urls$model))
       
-      # Load CpG annotation
-      ann450K <- data.table::fread(urls$cpg_anno)
-      ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
-      
       # Load reference beta matrix (row = CpGs, col = samples)
-      ref_beta <- readRDS(url(urls$ref_beta_rds))
+      ref_beta <- ref_beta()
       
       
       # 2) our imputation recipe exactly as in model development
@@ -461,16 +482,6 @@ server <- function(input, output, session) {
   })
   
   
-  # Reactive expression to wrap the GLOBAL train_data
-  training_data <- reactive({
-    # we expect train_data to already be loaded at top‐level,
-    # with rownames = sample IDs and a column "Class"
-    if (!"Class" %in% colnames(train_data)) {
-      stop("Global train_data must contain a column named 'Class'")
-    }
-    train_data
-  })
-  
   output$umap_plot <- renderPlot({
     # re-run whenever the button is clicked
     # will only proceed once you've clicked
@@ -568,8 +579,10 @@ server <- function(input, output, session) {
   
   
   marker_heatmap_data <- eventReactive(input$marker_plot_button, {
-    req(beta_data(), input$sample_accession)
-    
+    req(beta_data(), input$sample_accession, ref_beta(), ann450K())
+    # Load reference beta matrix (row = CpGs, col = samples)
+    ref_beta <- ref_beta()
+    ann450K <- ann450K()
     marker      <- input$marker
     sample_name <- input$sample_accession
     
@@ -654,7 +667,7 @@ server <- function(input, output, session) {
       
   
   observeEvent(input$plot_button, {
-    req(beta_data(), input$sample, input$gene_input, input$celltype)
+    req(beta_data(), input$sample, input$gene_input, input$celltype, ann450K())
     
     withProgress(message = "Generating gene‐level heatmap", value = 0, {
       
@@ -665,6 +678,7 @@ server <- function(input, output, session) {
       gene_name   <- toupper(input$gene_input)
       
       #prepare CpG annotation
+      ann450K <- ann450K()
       probes_for_gene <- ann450K %>%
         filter(UCSC_RefGene_Name == gene_name) %>%
         distinct(Name, .keep_all = TRUE) %>%
