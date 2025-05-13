@@ -313,13 +313,20 @@ server <- function(input, output, session) {
     ann450K
   })
   
+  # Reactive expression to wrap the training set sample anno
+  sample_anno <- reactive({
+    sample_anno <- data.table::fread(urls$train_anno)
+    sample_anno$Class <- as.factor(sample_anno$Class_rf)
+    sample_anno
+  })
+  
+  
   classification <- eventReactive(input$classify, {
-    req(beta_data(), training_data())
+    req(beta_data(), training_data(), sample_anno())
     
     withProgress(message = "Running classification", value = 0, {
       # ===== Read files directly into memory =====
-      sample_anno <- data.table::fread(urls$train_anno)
-      sample_anno$Class <- as.factor(sample_anno$Class_rf)
+      sample_anno <- sample_anno()
       
       train_data <- training_data()
       
@@ -579,7 +586,7 @@ server <- function(input, output, session) {
   
   
   marker_heatmap_data <- eventReactive(input$marker_plot_button, {
-    req(beta_data(), input$sample_accession, ref_beta(), ann450K())
+    req(beta_data(), input$sample_accession, ref_beta(), ann450K(), sample_anno())
     # Load reference beta matrix (row = CpGs, col = samples)
     ref_beta <- ref_beta()
     ann450K <- ann450K()
@@ -613,6 +620,7 @@ server <- function(input, output, session) {
     
     
     # 3) bind test sample & build annotation
+    sample_anno <- sample_anno()
     
     ref_anno_full    <- sample_anno[match(colnames(beta_values_ref),
                                           sample_anno$Sample_accession), ]
@@ -667,10 +675,10 @@ server <- function(input, output, session) {
       
   
   observeEvent(input$plot_button, {
-    req(beta_data(), input$sample, input$gene_input, input$celltype, ann450K())
+    req(beta_data(), input$sample, input$gene_input, input$celltype, ann450K(), ref_beta(), sample_anno())
     
     withProgress(message = "Generating gene‐level heatmap", value = 0, {
-      
+      ref_beta <- ref_beta()
       # 1) look up probes for this gene
       incProgress(0.1, detail = "Finding CpGs for gene…")
       celltype    <- input$celltype
@@ -705,7 +713,7 @@ server <- function(input, output, session) {
       colnames(test_mat) <- sample_name
       
       beta_values <- cbind(beta_values_ref, test_mat)
-      
+      sample_anno <- sample_anno()
       samp_anno_heatmap <- sample_anno[match(colnames(beta_values), sample_anno$Sample_accession), ]
       samp_anno_heatmap <- samp_anno_heatmap %>% 
         filter(Class %in% c(celltype, "iPSC"))
