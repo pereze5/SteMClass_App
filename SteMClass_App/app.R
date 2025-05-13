@@ -19,50 +19,6 @@ urls <- list(
 )
 
 
-# ===== Read files directly into memory =====
-sample_anno <- data.table::fread(urls$train_anno)
-sample_anno$Class <- as.factor(sample_anno$Class_rf)
-
-train_data <- data.table::fread(urls$train_data)
-train_data$Class <- factor(train_data$Class_rf)
-train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
-
-# Load model directly from URL
-rf_fit <- readRDS(url(urls$model))
-
-# Load CpG annotation
-ann450K <- data.table::fread(urls$cpg_anno)
-ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
-
-# Load reference beta matrix (row = CpGs, col = samples)
-ref_beta <- readRDS(url(urls$ref_beta_rds))
-
-predict_raw <- function(new_data, threshold = 0.6) {
-  # 1) predict raw probabilities
-  raw_probs <- predict(rf_fit, new_data = new_data, type = "prob")
-  
-  # 2) rename columns from .pred_Class → Class
-  raw_probs <- raw_probs %>%
-    rename_with(~ str_remove(.x, "^\\.pred_"), starts_with(".pred_"))
-  
-  # 3) apply threshold logic
-  prob_cols <- colnames(raw_probs)
-  out_df <- raw_probs %>%
-    rowwise() %>%
-    mutate(
-      max_prob   = max(c_across(all_of(prob_cols)), na.rm = TRUE),
-      pred_class = if (max_prob > threshold) {
-        prob_cols[which.max(c_across(all_of(prob_cols)))]
-      } else {
-        "reject"
-      }
-    ) %>%
-    ungroup() %>%
-    mutate(pred_class = factor(pred_class, levels = c(prob_cols, "reject")))
-  
-  return(out_df)
-}
-
 # Activate thematic for ggplot2 styling based on bs_theme
 thematic::thematic_shiny()
 
@@ -334,6 +290,23 @@ server <- function(input, output, session) {
     req(beta_data())
     
     withProgress(message = "Running classification", value = 0, {
+      # ===== Read files directly into memory =====
+      sample_anno <- data.table::fread(urls$train_anno)
+      sample_anno$Class <- as.factor(sample_anno$Class_rf)
+      
+      train_data <- data.table::fread(urls$train_data)
+      train_data$Class <- factor(train_data$Class_rf)
+      train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
+      
+      # Load model directly from URL
+      rf_fit <- readRDS(url(urls$model))
+      
+      # Load CpG annotation
+      ann450K <- data.table::fread(urls$cpg_anno)
+      ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
+      
+      # Load reference beta matrix (row = CpGs, col = samples)
+      ref_beta <- readRDS(url(urls$ref_beta_rds))
       
       
       # 2) our imputation recipe exactly as in model development
@@ -371,6 +344,31 @@ server <- function(input, output, session) {
       
       # 4) predict
       incProgress(0.4, detail = "Predicting…")
+      predict_raw <- function(new_data, threshold = 0.6) {
+        # 1) predict raw probabilities
+        raw_probs <- predict(rf_fit, new_data = new_data, type = "prob")
+        
+        # 2) rename columns from .pred_Class → Class
+        raw_probs <- raw_probs %>%
+          rename_with(~ str_remove(.x, "^\\.pred_"), starts_with(".pred_"))
+        
+        # 3) apply threshold logic
+        prob_cols <- colnames(raw_probs)
+        out_df <- raw_probs %>%
+          rowwise() %>%
+          mutate(
+            max_prob   = max(c_across(all_of(prob_cols)), na.rm = TRUE),
+            pred_class = if (max_prob > threshold) {
+              prob_cols[which.max(c_across(all_of(prob_cols)))]
+            } else {
+              "reject"
+            }
+          ) %>%
+          ungroup() %>%
+          mutate(pred_class = factor(pred_class, levels = c(prob_cols, "reject")))
+        
+        return(out_df)
+      }
       pred_df <- predict_raw(
         new_data    = baked,
         threshold   = 0.6
@@ -409,7 +407,11 @@ server <- function(input, output, session) {
     predicted_class <- res$prediction    # already a character string
     
     # pull out the probability for that class:
-    prediction_score <- as.numeric(res$probabilities[[predicted_class]])
+    prediction_score <- if (predicted_class == "reject") {
+      NA_real_
+    } else {
+      as.numeric(res$probabilities[[predicted_class]])
+    }
     
     paste0(
       "Sample: ",         sample_name,     "\n",
