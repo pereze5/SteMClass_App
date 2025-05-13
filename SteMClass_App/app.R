@@ -59,11 +59,22 @@ custom_css <- "
 .btn:hover {
   background-color: #005c99 !important;
 }
+.btn-green {
+  background-color: #28a745;
+  color: white;
+  border-color: #28a745;
+  border-radius: .25rem;   
+}
 .progress-bar {
   background-color: #28a745 !important;
 }
 .progress-bar-danger {
   background-color: #D55E00 !important;
+}
+#form .action-button {
+  display: block;
+  width: 100%;       /* optional, makes them full-width */
+  margin-bottom: 10px;
 }
 "
 
@@ -80,40 +91,78 @@ ui <- navbarPage(
     title = "Classification",
     sidebarLayout(
       sidebarPanel(
-        id = "sidebar",
-        fileInput("idat_files", "Upload IDAT Files",
-                  multiple = TRUE,
-                  accept = c(".idat")),
-        textInput("sample_accession", "Enter Sample ID:"),
-        selectInput("array_version", "Select Array Version:",
-                    choices = c("450K", "EPICv1", "EPICv2"),
-                    selected = "450K"),
-        actionButton("load_samples", "Load Sample", icon = icon("upload")),
-        textInput("sample", "", value = ""),
-        actionButton("classify", "Run Classification", icon = icon("play")),
-        hr(),
-        h4("Instructions:"),
-        tags$ol(
-          tags$li("Upload a pair of IDAT files (one Red and one Grn)."),
-          tags$li("Specify the Sample ID and choose the Array version (450K, EPICv1 or EPICv2)."),
-          tags$li('Click "Load Sample"'),
-          tags$li('Click "Run Classification" to classify the sample.'))
+        fileInput(
+          inputId = "idat_files",
+          label   = "Upload IDAT Files",
+          multiple = TRUE,
+          accept   = ".idat"
         ),
+        # Wrap your form inputs in one div
+        tags$div(
+          id = "form",
+          
+          textInput(
+            inputId = "sample_accession",
+            label   = "Enter Sample ID:"
+          ),
+          
+          selectInput(
+            inputId = "array_version",
+            label   = "Array Version:",
+            choices = c("450K", "EPICv1", "EPICv2")
+          ),
+          
+          actionButton(
+            inputId = "load_samples",
+            label   = "Load Sample",
+            icon    = icon("upload"),
+            style   = "margin-bottom: 10px;"
+          ),
+          
+          actionButton(
+            inputId = "classify",
+            label   = "Run Classification",
+            icon    = icon("play"),
+            style   = "margin-bottom: 10px;"
+          ),
+          
+          actionButton(
+            inputId = "reset",
+            label   = "Next Sample",
+            icon    = icon("redo")
+          ),
+          
+          hr(),
+          
+          h4("Instructions:"),
+          tags$ol(
+            tags$li("Upload a pair of IDAT files (one Red and one Grn)."),
+            tags$li("Specify the Sample ID and choose the Array version (450K, EPICv1 or EPICv2)."),
+            tags$li("Click “Load Sample”"),
+            tags$li("Click “Run Classification” to classify the sample.")
+          )
+        )  # end tags$div(id="form", ...)
+      ),   # end sidebarPanel()
+      
       mainPanel(
         h3("Classification Results"),
         div(
-          style = "background-color: #f8f9fa; padding: 20px; border-radius: 8px; margin-bottom: 20px;",
+          style = "background-color: #f8f9fa;
+                 padding: 20px;
+                 border-radius: 8px;
+                 margin-bottom: 20px;",
           verbatimTextOutput("class_result")
         ),
         h3("Probability Chart"),
         plotOutput("probability_chart")
-      ))
-    ),
+      )
+    )     # end sidebarLayout()
+  ),       # end tabPanel()
   tabPanel(
     title = "Sample Visualization",
     sidebarLayout(
       sidebarPanel(
-        h4("UMAP Settings"),
+        h4("UMAP"),
         actionButton("generate_umap", "Generate UMAP", icon = icon("chart-area")),
         hr(),
         h4("Instructions:"),
@@ -132,8 +181,15 @@ ui <- navbarPage(
     title = "Cell State Global Beta Value Visualization",
     sidebarLayout(
       sidebarPanel(
+        h4("Global Heatmap"),
         selectInput("marker", "Select Reference Cell State:", choices = c( "Ectoderm", "Endoderm", "Mesoderm", "Lung", "Endothelial", "NSC", "Astrocyte")),
-        actionButton("marker_plot_button", "Plot Heatmap")
+        actionButton("marker_plot_button", "Plot Heatmap"),
+        hr(),
+        h4("Instructions:"),
+        tags$ol(
+          tags$li('Generate a heatmap that visualizes the global DNA methylation profiles of the test sample and reference set.'),
+          tags$li("The heatmap will use the top 10,000 CpG sites that distinguish the selected cell state from iPSC.")
+        )
       ),
       
       mainPanel(
@@ -145,7 +201,7 @@ ui <- navbarPage(
     title = "Cell State Gene Level Beta Value Visualization",
     sidebarLayout(
       sidebarPanel(
-        # NEW: a dropdown to pick which cell‐state reference to plot
+        h4("Gene Heatmap"),
         selectInput(
           inputId = "celltype",
           label   = "Select Reference Cell State:",
@@ -171,6 +227,12 @@ ui <- navbarPage(
         actionButton(
           inputId = "plot_button",
           label   = "Plot Heatmap"
+        ),
+        hr(),
+        h4("Instructions:"),
+        tags$ol(
+          tags$li('Generate a heatmap that visualizes the gene-level DNA methylation profiles of the test sample and reference set.'),
+          tags$li("The heatmap will use the CpG sites that are annotated to the given gene according to the Illumina 450K array annotation.")
         )
       ),
       
@@ -238,28 +300,40 @@ server <- function(input, output, session) {
       sampleNames(rgSet) <- targets$Sample_accession
       
       # 3. Preprocess (split out each branch so we can show progress)
-      incProgress(0.3, detail = "Preprocessing (Noob)…")
-      mSet <- preprocessNoob(rgSet)
       
       if (input$array_version == "EPICv2") {
-        incProgress(0.2, detail = "Cleaning EPICv2…")
-        mSet   <- epicv2clean(mSet)
+        incProgress(0.3, detail = "Preprocessing (Noob)…")
+        rgSet@annotation <- c(array = "IlluminaHumanMethylationEPICv2", annotation = "20a1.hg38")
+        mSetv2 <- preprocessNoob(rgSet)
+        mSetv2   <- epicv2clean(mSetv2)
+        
+        incProgress(0.05, detail = "Converting to 450K…")
+        mSetv1 <- readRDS("Mset1_EPICv2_sample_combinearrays.rds")
+        mSet450_all <- combineArrays(mSetv2,mSetv1,
+                               outType = "IlluminaHumanMethylation450k")
+        mSet <- mSet450_all[, sampleNames(mSetv2)]
+        
         incProgress(0.1, detail = "Mapping to genome…")
         mSetSq <- mapToGenome(mSet)
-        incProgress(0.05, detail = "Converting to 450K…")
-        mSetSq <- convertArray(mSetSq,
-                               outType = "IlluminaHumanMethylation450k")
+        
         beta   <- getBeta(mSetSq)
         
       } else if (input$array_version == "EPICv1") {
+        incProgress(0.3, detail = "Preprocessing (Noob)…")
+        mSet <- preprocessNoob(rgSet)
+        
+        incProgress(0.05, detail = "Converting to 450K…")
+        mSet <- convertArray(mSet,
+                               outType = "IlluminaHumanMethylation450k")
+        
         incProgress(0.2, detail = "Mapping to genome…")
         mSetSq <- mapToGenome(mSet)
-        incProgress(0.05, detail = "Converting to 450K…")
-        mSetSq <- convertArray(mSetSq,
-                               outType = "IlluminaHumanMethylation450k")
+        
         beta   <- getBeta(mSetSq)
         
       } else if (input$array_version == "450K") {
+        incProgress(0.3, detail = "Preprocessing (Noob)…")
+        mSet <- preprocessNoob(rgSet)
         incProgress(0.35, detail = "Mapping to genome…")
         mSetSq <- mapToGenome(mSet)
         beta   <- getBeta(mSetSq)
@@ -277,14 +351,21 @@ server <- function(input, output, session) {
     })
   })
   
-  
+ 
 
-
-  # Update sample name box when sample is processed - triggered by sample button is pressed
   observeEvent(input$load_samples, {
     req(beta_data())
-    updateTextInput(session, "sample", value = paste(rownames(beta_data()), "loaded"))
+    
+    updateActionButton(session, "load_samples",
+                       label = "Ready!",
+                       icon  = icon("check"))
+    # swap CSS classes:
+    shinyjs::removeClass("load_samples", "btn")
+    shinyjs::addClass("load_samples",    "btn-green")
+    # optionally disable it so they can’t click again
+    #shinyjs::disable("load_samples")
   })
+  
   
   # Reactive expression to wrap the train_data
   training_data <- reactive({
@@ -350,7 +431,7 @@ server <- function(input, output, session) {
       
       # 1) pull out your sample
       incProgress(0.1, detail = "Extracting sample…")
-      sample_name <- input$sample
+      sample_name <- input$sample_accession
       test_sample <- beta_data()
       
       # 2) align columns & insert NAs
@@ -486,6 +567,10 @@ server <- function(input, output, session) {
         axis.text.y    = element_text(face = "bold", size = 12),
         axis.text.x    = element_text(size = 12)
       )
+  })
+  
+  observeEvent(input$reset, {
+    session$reload()
   })
   
   
@@ -675,14 +760,14 @@ server <- function(input, output, session) {
       
   
   observeEvent(input$plot_button, {
-    req(beta_data(), input$sample, input$gene_input, input$celltype, ann450K(), ref_beta(), sample_anno())
+    req(beta_data(), input$gene_input, input$celltype, ann450K(), ref_beta(), sample_anno())
     
     withProgress(message = "Generating gene‐level heatmap", value = 0, {
       ref_beta <- ref_beta()
       # 1) look up probes for this gene
       incProgress(0.1, detail = "Finding CpGs for gene…")
       celltype    <- input$celltype
-      sample_name <- input$sample
+      sample_name <- input$sample_accession
       gene_name   <- toupper(input$gene_input)
       
       #prepare CpG annotation
