@@ -9,6 +9,34 @@ library(bslib)        # For Bootstrap theming
 library(shinycssloaders)
 # Load the trained model, training means, and CpG annotation table
 
+# ==== Streamed file URLs ====
+urls <- list(
+  model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
+  train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
+  train_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
+  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
+  ref_beta_rds = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.rds"
+)
+
+
+# ===== Read files directly into memory =====
+sample_anno <- data.table::fread(urls$train_anno)
+sample_anno$Class <- as.factor(sample_anno$Class_rf)
+
+train_data <- data.table::fread(urls$train_data)
+train_data$Class <- factor(train_data$Class_rf)
+train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
+
+# Load model directly from URL
+rf_fit <- readRDS(url(urls$model))
+
+# Load CpG annotation
+ann450K <- data.table::fread(urls$cpg_anno)
+ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
+
+# Load reference beta matrix (row = CpGs, col = samples)
+ref_beta <- readRDS(url(urls$ref_beta_rds))
+
 predict_raw <- function(new_data, threshold = 0.6) {
   # 1) predict raw probabilities
   raw_probs <- predict(rf_fit, new_data = new_data, type = "prob")
@@ -306,33 +334,6 @@ server <- function(input, output, session) {
     req(beta_data())
     
     withProgress(message = "Running classification", value = 0, {
-      # ==== Streamed file URLs ====
-      urls <- list(
-        model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
-        train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
-        train_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
-        cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
-        ref_beta_rds = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.rds"
-      )
-      
-      
-      # ===== Read files directly into memory =====
-      sample_anno <- data.table::fread(urls$train_anno)
-      sample_anno$Class <- as.factor(sample_anno$Class_rf)
-      
-      train_data <- data.table::fread(urls$train_data)
-      train_data$Class <- factor(train_data$Class_rf)
-      train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
-      
-      # Load model directly from URL
-      rf_fit <- readRDS(url(urls$model))
-      
-      # Load CpG annotation
-      ann450K <- data.table::fread(urls$cpg_anno)
-      ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
-      
-      # Load reference beta matrix (row = CpGs, col = samples)
-      ref_beta <- readRDS(url(urls$ref_beta_rds))
       
       
       # 2) our imputation recipe exactly as in model development
