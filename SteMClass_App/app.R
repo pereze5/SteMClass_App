@@ -1,7 +1,7 @@
 
 
 
-#options(shiny.maxRequestSize = 30*1024^2)
+options(shiny.maxRequestSize = 30*1024^2)
 
 library(shinyjs)
 library(thematic)     # For automatic theming of ggplot2 plots
