@@ -921,8 +921,8 @@
       }
     },
     "IlluminaHumanMethylationEPICv2anno.20a1.hg38": {
-      "Source": "github",
-      "Repository": null,
+      "Source": "Bioconductor",
+      "Repository": "https://bioconductor.org/packages/3.20/data/annotation",
       "description": {
         "Package": "IlluminaHumanMethylationEPICv2anno.20a1.hg38",
         "Version": "1.0.0",
@@ -939,26 +939,16 @@
         "biocViews": "AnnotationData, IlluminaChip, Homo_sapiens",
         "LazyData": "yes",
         "LazyDataCompression": "xz",
-        "RemoteType": "github",
-        "RemoteHost": "api.github.com",
-        "RemoteRepo": "IlluminaHumanMethylationEPICv2anno.20a1.hg38",
-        "RemoteUsername": "jokergoo",
-        "RemoteRef": "HEAD",
-        "RemoteSha": "702e52acb8268353bd8c753e67a2096c565f9782",
-        "GithubRepo": "IlluminaHumanMethylationEPICv2anno.20a1.hg38",
-        "GithubUsername": "jokergoo",
-        "GithubRef": "HEAD",
-        "GithubSHA1": "702e52acb8268353bd8c753e67a2096c565f9782",
         "NeedsCompilation": "no",
-        "Packaged": "2025-05-11 14:41:04 UTC; eilis",
+        "Packaged": "2024-03-26 14:25:36 UTC; lorikern",
         "Author": "Zuguang Gu [aut, cre] (<https://orcid.org/0000-0002-7395-8709>)",
         "Maintainer": "Zuguang Gu <z.gu@dkfz.de>",
-        "Built": "R 4.4.2; ; 2025-05-11 14:41:15 UTC; windows"
+        "Built": "R 4.4.2; ; 2025-05-13 23:08:16 UTC; windows"
       }
     },
     "IlluminaHumanMethylationEPICv2manifest": {
-      "Source": "github",
-      "Repository": null,
+      "Source": "Bioconductor",
+      "Repository": "https://bioconductor.org/packages/3.20/data/annotation",
       "description": {
         "Package": "IlluminaHumanMethylationEPICv2manifest",
         "Version": "1.0.0",
@@ -975,21 +965,11 @@
         "biocViews": "AnnotationData, IlluminaChip, Homo_sapiens",
         "LazyData": "yes",
         "LazyDataCompression": "xz",
-        "RemoteType": "github",
-        "RemoteHost": "api.github.com",
-        "RemoteRepo": "IlluminaHumanMethylationEPICv2manifest",
-        "RemoteUsername": "jokergoo",
-        "RemoteRef": "HEAD",
-        "RemoteSha": "f1aa598c00e680f85114480e8214e178e248af21",
-        "GithubRepo": "IlluminaHumanMethylationEPICv2manifest",
-        "GithubUsername": "jokergoo",
-        "GithubRef": "HEAD",
-        "GithubSHA1": "f1aa598c00e680f85114480e8214e178e248af21",
         "NeedsCompilation": "no",
-        "Packaged": "2025-05-11 14:38:14 UTC; eilis",
+        "Packaged": "2024-03-26 14:14:38 UTC; lorikern",
         "Author": "Zuguang Gu [aut, cre] (<https://orcid.org/0000-0002-7395-8709>)",
         "Maintainer": "Zuguang Gu <z.gu@dkfz.de>",
-        "Built": "R 4.4.2; ; 2025-05-11 14:38:15 UTC; windows"
+        "Built": "R 4.4.2; ; 2025-05-13 22:23:56 UTC; windows"
       }
     },
     "KEGGREST": {
@@ -7289,7 +7269,10 @@
   },
   "files": {
     "app.R": {
-      "checksum": "8cb88ea3b3b3e9af0e5e230de4e5bbcc"
+      "checksum": "60f57811659bb8babe33156465506851"
+    },
+    "Mset1_EPICv2_sample_combinearrays.rds": {
+      "checksum": "8a29c64f006139f4fe3b8830641f8473"
     }
   },
   "users": null
