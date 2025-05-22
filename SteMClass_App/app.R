@@ -119,11 +119,7 @@ ui <- navbarPage(
           actionButton(
             inputId = "load_samples",
             label   = "Start Data Preprocessing",
-<<<<<<< HEAD
             icon    = icon("broom"),
-=======
-            icon    = icon("upload"),
->>>>>>> f4b686ee1c628513b7370fe042b62ebb6064baa4
             style   = "margin-bottom: 10px;"
           ),
           
