@@ -82,6 +82,10 @@ custom_css <- "
 # Define the Shiny UI with the selected theme and custom CSS
 ui <- navbarPage(
   title = "SteMClass",
+  footer = div(
+    style = "position: fixed; bottom: 10px; right: 10px; z-index: 1000;",
+    downloadButton("download_report", "Download PDF Report")
+  ),
   theme = theme,
   useShinyjs(),
   tags$head(
@@ -115,7 +119,7 @@ ui <- navbarPage(
           actionButton(
             inputId = "load_samples",
             label   = "Start Data Preprocessing",
-            icon    = icon("upload"),
+            icon    = icon("broom"),
             style   = "margin-bottom: 10px;"
           ),
           
@@ -145,18 +149,23 @@ ui <- navbarPage(
       ),   # end sidebarPanel()
       
       mainPanel(
-        h3("Classification Results"),
-        div(
-          style = "background-color: #f8f9fa;
+        # 1) wrap everything in a relative‐positioned div
+        div(style = "position: relative; padding-bottom: 60px;",
+            
+            h3("Classification Results"),
+            div(
+              style = "background-color: #f8f9fa;
                  padding: 20px;
                  border-radius: 8px;
                  margin-bottom: 20px;",
-          verbatimTextOutput("class_result")
-        ),
-        h3("Probability Chart"),
-        plotOutput("probability_chart")
-      )
-    )     # end sidebarLayout()
+              verbatimTextOutput("class_result")
+            ),
+            
+            h3("Probability Chart"),
+            plotOutput("probability_chart")
+            )
+        )
+      )# end sidebarLayout()
   ),       # end tabPanel()
   tabPanel(
     title = "Sample Visualization",
@@ -172,8 +181,12 @@ ui <- navbarPage(
         )
       ),
       mainPanel(
-        h3("UMAP Visualization"),
-        plotOutput("umap_plot", height = "600px")
+        div(
+          style = "position: relative; padding-bottom: 60px;",
+          
+          h3("UMAP Visualization"),
+          plotOutput("umap_plot", height = "600px")
+        )
       )
     )
   ),
@@ -193,7 +206,15 @@ ui <- navbarPage(
       ),
       
       mainPanel(
-        withSpinner(plotOutput("marker_heatmap_plot"), type=4, color="#0072B2")
+        div(
+          style = "position: relative; padding-bottom: 60px;",
+          
+          withSpinner(
+            plotOutput("marker_heatmap_plot"),
+            type  = 4,
+            color = "#0072B2"
+          )
+        )
       )
     )
   ),
@@ -237,7 +258,11 @@ ui <- navbarPage(
       ),
       
       mainPanel(
-        uiOutput("heatmap_ui")
+        div(
+          style = "position: relative; padding-bottom: 60px;",
+          
+          uiOutput("heatmap_ui")
+        )
       )
     )
   )
@@ -915,6 +940,107 @@ server <- function(input, output, session) {
       
     })  # end withProgress
   })
+
+  output$download_report <- downloadHandler(
+    filename = function() {
+      paste0("classification_report_", input$sample_accession, ".html")
+    },
+    content = function(file) {
+      tempRmd <- file.path(tempdir(), "report.Rmd")
+      file.copy("report.Rmd", tempRmd, overwrite = TRUE)
+      
+      res <- classification()
+      req(res)
+      
+      # 1) Build and clean up the results table
+      results_tbl <- res$results %>%
+        bind_cols(as_tibble(res$probabilities))
+      colnames(results_tbl) <- make.names(colnames(results_tbl), unique = TRUE)
+      
+      # 2) Rebuild probability chart (with linewidth)
+      prob_plot <- {
+        prob_df <- as.data.frame(res$probabilities) %>%
+          pivot_longer(everything(), names_to="Class", values_to="Probability") %>%
+          arrange(desc(Probability))
+        max_class <- prob_df$Class[1]
+        ggplot(prob_df, aes(
+          x    = reorder(Class, Probability),
+          y    = Probability,
+          fill = Class == max_class
+        )) +
+          geom_col(width = 0.6) +
+          geom_hline(yintercept = 0.6, linetype="dashed", linewidth=0.8) +
+          coord_flip() +
+          scale_fill_manual(values=c("FALSE"="#6c757d","TRUE"="#0072B2")) +
+          ylim(0,1) +
+          theme_minimal(base_size = 14) +
+          labs(title="Class Probabilities", x="Class", y="Probability")
+      }
+      
+      # 1) extract exactly as in renderPlot()
+      test_sample   <- res$test_sample
+      train_df      <- training_data()
+      train_df       <- as.data.frame(training_data())
+      test_df        <- as.data.frame(res$test_sample)
+      
+      feature_cols  <- colnames(test_sample)
+      missing_train <- setdiff(feature_cols, colnames(train_df))
+      if (length(missing_train)) {
+        stop("Missing predictors in training data: ", paste(missing_train, collapse = ", "))
+      }
+      train_features <- train_df[, feature_cols, drop = FALSE]
+      
+      # 2) combine them
+      combined_data <- rbind(train_features, test_sample)
+      
+      # 3) run UMAP exactly as before
+      set.seed(123)
+      umap_res <- uwot::umap(
+        combined_data,
+        n_neighbors = 15,
+        min_dist     = 0.1,
+        metric       = "euclidean"
+      )
+      
+      # 4) build the plotting frame
+      train_labels <- train_df$Class
+      umap_df <- data.frame(
+        UMAP1       = umap_res[,1],
+        UMAP2       = umap_res[,2],
+        Label       = c(as.character(train_labels), "Test Sample"),
+        Sample_Type = rep(c("Training Sample", "Test Sample"),
+                          c(length(train_labels), nrow(test_sample)))
+      )
+      
+      # 5) and finally your ggplot call…
+      umap_plot <- ggplot(umap_df, aes(x=UMAP1, y=UMAP2,
+                                       color=Label, shape=Sample_Type)) +
+        geom_point(size=3, alpha=0.8) +
+        theme_minimal(base_size=14) +
+        labs(title="UMAP Projection", color="Cell Type") +
+        scale_color_manual(values=c(
+          "Astrocyte"="#000080","Endothelial"="#D55E00",
+          "Mesoderm"="#E69F00","iPSC"="#CC79A7",
+          "Ectoderm"="#9ac7df","NSC"="#0072B2",
+          "Endoderm"="#a6dba0","Lung"="#238b45","Test Sample"="#000000"
+        )) +
+        scale_shape_manual(values=c("Training Sample"=16,"Test Sample"=17))
+      
+      # 4) Render the PDF
+      rmarkdown::render(
+        tempRmd,
+        output_file = file,
+        params = list(
+          results_tbl = results_tbl,
+          prob_plot   = prob_plot,
+          umap_plot   = umap_plot
+        ),
+        envir = new.env(parent = globalenv())
+      )
+    }
+  )
+  
+  
   
 }
 

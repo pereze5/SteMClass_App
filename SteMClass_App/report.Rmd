@@ -1,0 +1,15 @@
+---
+title: "Sample Classification Report"
+output:
+  html_document:
+    df_print: paged
+params:
+  results_tbl: NULL
+  prob_plot:   NULL
+  umap_plot:   NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE)
+library(knitr)
+
