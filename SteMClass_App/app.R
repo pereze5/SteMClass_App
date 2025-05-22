@@ -114,7 +114,7 @@ ui <- navbarPage(
           
           actionButton(
             inputId = "load_samples",
-            label   = "Load Sample",
+            label   = "Start Data Preprocessing",
             icon    = icon("upload"),
             style   = "margin-bottom: 10px;"
           ),
@@ -511,23 +511,30 @@ server <- function(input, output, session) {
     res <- classification()
     req(res)
     
-    # pull from the list, not from the results DF:
     sample_name     <- res$results$Sample
-    predicted_class <- res$prediction    # already a character string
+    predicted_class <- res$prediction    # raw output, e.g. "reject"
     
-    # pull out the probability for that class:
-    prediction_score <- if (predicted_class == "reject") {
-      NA_real_
+    # Decide what to show for class & score
+    display_class <- if (predicted_class == "reject") {
+      "Not Classifiable"
     } else {
-      as.numeric(res$probabilities[[predicted_class]])
+      predicted_class
+    }
+    
+    display_score <- if (predicted_class == "reject") {
+      "No score above cut-off"
+    } else {
+      # safe convert & round
+      round(as.numeric(res$probabilities[[predicted_class]]), 3)
     }
     
     paste0(
-      "Sample: ",         sample_name,     "\n",
-      "Prediction: ",     predicted_class, "\n",
-      "Prediction Score: ", round(prediction_score, 3)
+      "Sample ID: ",           sample_name,   "\n",
+      "Prediction: ",       display_class, "\n",
+      "Prediction Score: ", display_score
     )
   })
+  
   
   output$probability_chart <- renderPlot({
     res <- classification()
@@ -550,6 +557,13 @@ server <- function(input, output, session) {
       fill = Class == max_class
     )) +
       geom_col(width = 0.6) +
+      # cutoff line at 0.6
+      geom_hline(
+        yintercept = 0.6,
+        linetype   = "dashed",
+        color      = "red",
+        size       = 0.8
+      ) +
       coord_flip() +
       scale_fill_manual(
         values = c("FALSE" = "#6c757d", "TRUE" = "#0072B2"),
