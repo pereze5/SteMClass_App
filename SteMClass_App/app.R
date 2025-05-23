@@ -118,7 +118,7 @@ ui <- navbarPage(
           
           actionButton(
             inputId = "load_samples",
-            label   = "Start Data Preprocessing",
+            label   = "Preprocess Data",
             icon    = icon("broom"),
             style   = "margin-bottom: 10px;"
           ),
@@ -132,7 +132,7 @@ ui <- navbarPage(
           
           actionButton(
             inputId = "reset",
-            label   = "Next Sample",
+            label   = "New Analysis",
             icon    = icon("redo")
           ),
           

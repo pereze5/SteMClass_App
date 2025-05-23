@@ -10,6 +10,21 @@ params:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo=FALSE)
+knitr::opts_chunk$set(
+  echo       = FALSE,
+  message    = FALSE,
+  warning    = FALSE,
+  fig.width  = 7,
+  fig.height = 5
+)
 library(knitr)
+library(ggplot2)
+
+kable(params$results_tbl, caption = "Complete classification output")
+
+print(params$prob_plot)
+
+print(params$umap_plot)
+
+````
 
