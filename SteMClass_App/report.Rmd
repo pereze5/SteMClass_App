@@ -2,29 +2,42 @@
 title: "Sample Classification Report"
 output:
   html_document:
+    theme: !expr bslib::bs_theme(bootswatch="flatly", primary="#0072B2", base_font=bslib::font_google("Roboto"))
     df_print: paged
 params:
-  results_tbl: NULL
-  prob_plot:   NULL
-  umap_plot:   NULL
+  class_text: NULL
+  prob_plot:  NULL
+  umap_plot:  NULL
 ---
 
 ```{r setup, include=FALSE}
+
+# load libraries
+library(knitr)
+library(ggplot2)
+library(bslib)
+library(thematic)
+
+# no need for thematic_knit—bslib in the YAML handles ggplot theming
 knitr::opts_chunk$set(
-  echo       = FALSE,
-  message    = FALSE,
-  warning    = FALSE,
+  echo    = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  comment = NA,    # drop the "##" prefix
   fig.width  = 7,
   fig.height = 5
 )
-library(knitr)
-library(ggplot2)
 
-kable(params$results_tbl, caption = "Complete classification output")
+
+
+```
+
+```{r plots, include=TRUE}
+cat(params$class_text)
 
 print(params$prob_plot)
 
 print(params$umap_plot)
 
-````
+```
 

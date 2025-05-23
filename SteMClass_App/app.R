@@ -82,10 +82,6 @@ custom_css <- "
 # Define the Shiny UI with the selected theme and custom CSS
 ui <- navbarPage(
   title = "SteMClass",
-  footer = div(
-    style = "position: fixed; bottom: 10px; right: 10px; z-index: 1000;",
-    downloadButton("download_report", "Download PDF Report")
-  ),
   theme = theme,
   useShinyjs(),
   tags$head(
@@ -142,28 +138,16 @@ ui <- navbarPage(
           tags$ol(
             tags$li("Upload a pair of IDAT files (one Red and one Grn)."),
             tags$li("Specify the Sample ID and choose the Array version (450K, EPICv1 or EPICv2)."),
-            tags$li("Click “Load Sample”"),
-            tags$li("Click “Run Classification” to classify the sample.")
+            tags$li("Click “Preprocess Data”"),
+            tags$li("Click “Run Classification” to classify the sample."),
+            tags$li("Click “New Analysis” to classify a new sample.")
           )
         )  # end tags$div(id="form", ...)
       ),   # end sidebarPanel()
       
       mainPanel(
-        # 1) wrap everything in a relative‐positioned div
         div(style = "position: relative; padding-bottom: 60px;",
-            
-            h3("Classification Results"),
-            div(
-              style = "background-color: #f8f9fa;
-                 padding: 20px;
-                 border-radius: 8px;
-                 margin-bottom: 20px;",
-              verbatimTextOutput("class_result")
-            ),
-            
-            h3("Probability Chart"),
-            plotOutput("probability_chart")
-            )
+            uiOutput("classification_ui"))
         )
       )# end sidebarLayout()
   ),       # end tabPanel()
@@ -211,10 +195,22 @@ ui <- navbarPage(
           
           withSpinner(
             plotOutput("marker_heatmap_plot"),
-            type  = 4,
+            type  = 5,
             color = "#0072B2"
           )
-        )
+        ),
+        
+        # download button
+        div(style = "position: fixed; bottom: 10px; right: 10px; z-index: 1000;",
+            downloadButton(
+              "download_marker_heatmap", "Download Marker Heatmap",
+              onclick = "$('#download_spinner').show();"
+            ),
+            tags$i(
+              id    = "download_spinner",
+              class = "fa fa-spinner fa-spin fa-lg",
+              style = "display: none; margin-left: 8px; color: #0072B2;"
+            ))
       )
     )
   ),
@@ -262,6 +258,16 @@ ui <- navbarPage(
           style = "position: relative; padding-bottom: 60px;",
           
           uiOutput("heatmap_ui")
+        ),
+        
+        div(style = "position: fixed; bottom: 10px; right: 10px; z-index: 1000;",
+            downloadButton("download_gene_heatmap", "Download Gene Heatmap"),
+            onclick = "$('#download_spinner_gene').show();"
+        ),
+        tags$i(
+          id    = "download_spinner_gene",
+          class = "fa fa-spinner fa-spin fa-lg",
+          style = "display: none; margin-left: 8px; color: #0072B2;"
         )
       )
     )
@@ -469,7 +475,7 @@ server <- function(input, output, session) {
       test_sample <- test_sample[, expected_cpgs, drop = FALSE]
       
       # 3) bake recipe (impute NAs, factor setup)
-      incProgress(0.2, detail = "Preprocessing data…")
+      incProgress(0.2, detail = "Preparing data…")
       test_sample <- test_sample %>%
         as_tibble(rownames = "Sample") %>%
         mutate(Class = factor(NA, levels = levels(train_data$Class))) %>%
@@ -531,6 +537,25 @@ server <- function(input, output, session) {
     })
   })
   
+  output$classification_ui <- renderUI({
+    # wait until classification() has something
+    res <- classification()
+    req(res)
+    
+    tagList(
+      h3("Classification Results"),
+      div(
+        style = "background-color: #f8f9fa;
+               padding: 20px;
+               border-radius: 8px;
+               margin-bottom: 20px;",
+        verbatimTextOutput("class_result")
+      ),
+      h3("Probability Chart"),
+      plotOutput("probability_chart"),
+      downloadButton("download_report","Download Classification Report")
+    )
+  })
   
   output$class_result <- renderText({
     res <- classification()
@@ -586,7 +611,7 @@ server <- function(input, output, session) {
       geom_hline(
         yintercept = 0.6,
         linetype   = "dashed",
-        color      = "red",
+        color      = "#6c757d",
         size       = 0.8
       ) +
       coord_flip() +
@@ -599,7 +624,8 @@ server <- function(input, output, session) {
         x     = "Class",
         y     = "Probability"
       ) +
-      ylim(0, 1) +
+      ylim(0, 1)  +
+      scale_y_continuous(breaks = seq(0, 1, by = 0.1))+
       theme_minimal(base_size = 14) +
       theme(
         plot.title     = element_text(hjust = 0.5, face = "bold"),
@@ -932,7 +958,7 @@ server <- function(input, output, session) {
         # put the spinner *around* the plotOutput
         withSpinner(
           plotOutput("heatmap_plot", height = plot_height),
-          type  = 4,
+          type  = 5,
           color = "#0072B2"
         )
       })
@@ -946,97 +972,192 @@ server <- function(input, output, session) {
       paste0("classification_report_", input$sample_accession, ".html")
     },
     content = function(file) {
+      # 1) copy the template
       tempRmd <- file.path(tempdir(), "report.Rmd")
       file.copy("report.Rmd", tempRmd, overwrite = TRUE)
-      
+      # 2) copy the CSS alongside it
+      tempCss <- file.path(tempdir(), "report.css")
+      file.copy("report.css", tempCss, overwrite = TRUE)
+      # 3) recreate the summary text
       res <- classification()
       req(res)
       
-      # 1) Build and clean up the results table
-      results_tbl <- res$results %>%
-        bind_cols(as_tibble(res$probabilities))
-      colnames(results_tbl) <- make.names(colnames(results_tbl), unique = TRUE)
+      sample_name     <- res$results$Sample
+      predicted_class <- res$prediction
       
-      # 2) Rebuild probability chart (with linewidth)
-      prob_plot <- {
-        prob_df <- as.data.frame(res$probabilities) %>%
-          pivot_longer(everything(), names_to="Class", values_to="Probability") %>%
+      class_text <- paste0(
+        "Sample ID: ",       sample_name,     "\n",
+        "Prediction: ",      if (predicted_class=="reject") "Not Classifiable" else predicted_class, "\n",
+        "Prediction Score: ",if (predicted_class=="reject") "No score above cut-off"
+        else round(as.numeric(res$probabilities[[predicted_class]]),3)
+      )
+      
+      # 4) rebuild the two plots exactly as before
+      prob_plot <- { 
+        res <- classification()
+        req(res)
+        
+        # turn the named list into a data frame
+        prob_df <- as.data.frame(res$probabilities, stringsAsFactors = FALSE) %>%
+          pivot_longer(
+            cols      = everything(),
+            names_to  = "Class",
+            values_to = "Probability"
+          ) %>%
           arrange(desc(Probability))
-        max_class <- prob_df$Class[1]
+        
+        max_class <- prob_df$Class[1]  # highest-probability class
+        
         ggplot(prob_df, aes(
           x    = reorder(Class, Probability),
           y    = Probability,
           fill = Class == max_class
         )) +
           geom_col(width = 0.6) +
-          geom_hline(yintercept = 0.6, linetype="dashed", linewidth=0.8) +
+          # cutoff line at 0.6
+          geom_hline(
+            yintercept = 0.6,
+            linetype   = "dashed",
+            color      = "#6c757d",
+            size       = 0.8
+          ) +
           coord_flip() +
-          scale_fill_manual(values=c("FALSE"="#6c757d","TRUE"="#0072B2")) +
-          ylim(0,1) +
+          scale_fill_manual(
+            values = c("FALSE" = "#6c757d", "TRUE" = "#0072B2"),
+            guide  = "none"
+          ) +
+          labs(
+            title = "Class Probabilities",
+            x     = "Class",
+            y     = "Probability"
+          ) +
+          ylim(0, 1) +
+          scale_y_continuous(breaks = seq(0, 1, by = 0.1))+
           theme_minimal(base_size = 14) +
-          labs(title="Class Probabilities", x="Class", y="Probability")
+          theme(
+            plot.title     = element_text(hjust = 0.5, face = "bold"),
+            axis.text.y    = element_text(face = "bold", size = 12),
+            axis.text.x    = element_text(size = 12)
+          )
       }
       
-      # 1) extract exactly as in renderPlot()
-      test_sample   <- res$test_sample
-      train_df      <- training_data()
-      train_df       <- as.data.frame(training_data())
-      test_df        <- as.data.frame(res$test_sample)
-      
-      feature_cols  <- colnames(test_sample)
-      missing_train <- setdiff(feature_cols, colnames(train_df))
-      if (length(missing_train)) {
-        stop("Missing predictors in training data: ", paste(missing_train, collapse = ", "))
+      umap_plot <- {
+        # copy your renderPlot UMAP code, e.g.:
+        test_sample <- res$test_sample
+        train_df    <- as.data.frame(training_data())
+        feature_cols <- colnames(test_sample)
+        train_features <- train_df[, feature_cols, drop=FALSE]
+        combined_data <- rbind(train_features, test_sample)
+        set.seed(123)
+        umap_res <- uwot::umap(combined_data, n_neighbors=15, min_dist=0.1, metric="euclidean")
+        train_labels <- training_data()$Class
+        umap_df <- data.frame(
+          UMAP1 = umap_res[,1], UMAP2 = umap_res[,2],
+          Label = c(as.character(train_labels), "Test Sample"),
+          Sample_Type = rep(c("Training","Test"), c(length(train_labels),1))
+        )
+        ggplot(umap_df, aes(UMAP1, UMAP2, color=Label, shape=Sample_Type))+
+          geom_point(size=3, alpha=0.8)+
+          theme_minimal(base_size=14)+
+          labs(title="UMAP Projection", color="Cell Type")+
+          scale_color_manual(values=c(
+            "Astrocyte"="#000080","Endothelial"="#D55E00",
+            "Mesoderm"="#E69F00","iPSC"="#CC79A7",
+            "Ectoderm"="#9ac7df","NSC"="#0072B2",
+            "Endoderm"="#a6dba0","Lung"="#238b45","Test Sample"="#000000"
+          ))+
+          scale_shape_manual(values=c("Training"=16,"Test"=17))
       }
-      train_features <- train_df[, feature_cols, drop = FALSE]
       
-      # 2) combine them
-      combined_data <- rbind(train_features, test_sample)
-      
-      # 3) run UMAP exactly as before
-      set.seed(123)
-      umap_res <- uwot::umap(
-        combined_data,
-        n_neighbors = 15,
-        min_dist     = 0.1,
-        metric       = "euclidean"
-      )
-      
-      # 4) build the plotting frame
-      train_labels <- train_df$Class
-      umap_df <- data.frame(
-        UMAP1       = umap_res[,1],
-        UMAP2       = umap_res[,2],
-        Label       = c(as.character(train_labels), "Test Sample"),
-        Sample_Type = rep(c("Training Sample", "Test Sample"),
-                          c(length(train_labels), nrow(test_sample)))
-      )
-      
-      # 5) and finally your ggplot call…
-      umap_plot <- ggplot(umap_df, aes(x=UMAP1, y=UMAP2,
-                                       color=Label, shape=Sample_Type)) +
-        geom_point(size=3, alpha=0.8) +
-        theme_minimal(base_size=14) +
-        labs(title="UMAP Projection", color="Cell Type") +
-        scale_color_manual(values=c(
-          "Astrocyte"="#000080","Endothelial"="#D55E00",
-          "Mesoderm"="#E69F00","iPSC"="#CC79A7",
-          "Ectoderm"="#9ac7df","NSC"="#0072B2",
-          "Endoderm"="#a6dba0","Lung"="#238b45","Test Sample"="#000000"
-        )) +
-        scale_shape_manual(values=c("Training Sample"=16,"Test Sample"=17))
-      
-      # 4) Render the PDF
+      # 4) render the HTML
       rmarkdown::render(
         tempRmd,
         output_file = file,
-        params = list(
-          results_tbl = results_tbl,
-          prob_plot   = prob_plot,
-          umap_plot   = umap_plot
+        params      = list(
+          class_text = class_text,
+          prob_plot  = prob_plot,
+          umap_plot  = umap_plot
         ),
-        envir = new.env(parent = globalenv())
+        envir = new.env(parent = globalenv()),
+        quiet = TRUE
       )
+    }
+  )
+  
+  observeEvent(input$download_marker_heatmap, {
+    shinyjs::show("download_spinner")
+  })
+  
+  output$download_marker_heatmap <- downloadHandler(
+    filename = function() {
+      paste0("marker_heatmap_", input$marker, "_", input$sample_accession, ".png")
+    },
+    content = function(file) {
+      on.exit(shinyjs::hide("download_spinner"), add=TRUE)
+      # open a PNG device
+      png(filename = file, width = 1200, height = 800, res = 150)
+      
+      # reproduce exactly what you did in renderPlot
+      dat <- marker_heatmap_data()
+      req(dat)
+      ht <- Heatmap(
+        dat$beta,
+        name = "Beta",
+        top_annotation = HeatmapAnnotation(
+          Cell_Type = dat$anno$Class,
+          col = list(Cell_Type = c(
+            Astrocyte   = "#000080", Endothelial="#D55E00",
+            Mesoderm    = "#E69F00", iPSC      ="#CC79A7",
+            Ectoderm    ="#9ac7df",  NSC       ="#0072B2",
+            Endoderm    ="#a6dba0",  Lung      ="#238b45",
+            `Test Sample`="#000000"
+          )),
+          annotation_legend_param=list(Cell_Type=list(title="Cell Type"))
+        ),
+        show_row_names    = FALSE,
+        show_column_names = FALSE,
+        cluster_rows      = TRUE,
+        cluster_columns   = TRUE,
+        row_title         = paste("CpGs for", dat$marker)
+      )
+      draw(ht, heatmap_legend_side="right", annotation_legend_side="right")
+      
+      dev.off()
+      
+    }
+  )
+  output$download_gene_heatmap <- downloadHandler(
+    filename = function() {
+      paste0("gene_heatmap_", input$gene_input, "_", input$sample_accession, ".png")
+    },
+    content = function(file) {
+      on.exit(shinyjs::hide("download_spinner_gene"), add=TRUE)
+      # dynamically compute height
+      num_probes  <- nrow(beta_values)
+      plot_height <- min(400 + num_probes * 20, 2000)
+      # open device
+      png(file, width = 1200, height = plot_height, res = 150)
+      
+      # re-use the same code you have inside renderPlot for heatmap_plot
+      dat <- marker_heatmap_data()  # or your gene‐specific data getter
+      # (make sure you call the same eventReactive that build the gene heatmap)
+      ht <- Heatmap(
+        beta_values,  # your matrix
+        name               = "Beta Value",
+        show_row_names     = TRUE,
+        show_column_names  = FALSE,
+        cluster_rows       = FALSE,
+        cluster_columns    = TRUE,
+        top_annotation     = col.ha,   # your column annotation
+        right_annotation   = row.ha,   # your row annotation
+        col                = colorRamp2(c(0, 0.5, 1), c("blue","white","red")),
+        row_title          = paste("CpG Sites for", toupper(input$gene_input)),
+        column_title       = "Samples",
+        heatmap_legend_param = list(title = "Beta Value")
+      )
+      draw(ht, heatmap_legend_side="right", annotation_legend_side="right")
+      
+      dev.off()
     }
   )
   
