@@ -257,7 +257,11 @@ ui <- navbarPage(
         div(
           style = "position: relative; padding-bottom: 60px;",
           
-          uiOutput("heatmap_ui")
+          withSpinner(
+            plotOutput("heatmap_plot"),
+            type  = 5,
+            color = "#0072B2"
+          )
         ),
         
         div(style = "position: fixed; bottom: 10px; right: 10px; z-index: 1000;",
@@ -824,7 +828,8 @@ server <- function(input, output, session) {
   }, height=500)
       
   
-  observeEvent(input$plot_button, {
+  # 1) Build a Heatmap object when the user clicks “Plot Heatmap”
+  gene_heatmap_obj <- eventReactive(input$plot_button, {
     req(beta_data(), input$gene_input, input$celltype, ann450K(), ref_beta(), sample_anno())
     
     withProgress(message = "Generating gene‐level heatmap", value = 0, {
@@ -846,7 +851,7 @@ server <- function(input, output, session) {
         return(NULL)
       }
       cpg_ids <- probes_for_gene$Name
-
+      
       # 2) filter bvals
       incProgress(0.3, detail = "Filtering beta values")
       # Filter to CpGs of interest in ref_beta
@@ -932,8 +937,7 @@ server <- function(input, output, session) {
       
       # 5) render the heatmap
       incProgress(0.2, detail = "Rendering heatmap…")
-      output$heatmap_plot <- renderPlot({
-        ht <- Heatmap(
+        Heatmap(
           beta_values,
           name               = "Beta Value",
           show_row_names     = TRUE,
@@ -948,24 +952,24 @@ server <- function(input, output, session) {
           column_title       = "Samples",
           heatmap_legend_param = list(title = "Beta Value")
         )
-        draw(ht, heatmap_legend_side = "right",
-             annotation_legend_side = "right")
-      }, height = plot_height)
-      
-      ### SERVER: renderUI that only shows the plotOutput once you click…
-      output$heatmap_ui <- renderUI({
-        req(input$plot_button)          # only after the button
-        # put the spinner *around* the plotOutput
-        withSpinner(
-          plotOutput("heatmap_plot", height = plot_height),
-          type  = 5,
-          color = "#0072B2"
-        )
-      })
-      
-      
-    })  # end withProgress
+    })
+        
   })
+  
+  # 2) Render the heatmap onscreen
+  output$heatmap_plot <- renderPlot({
+    ht <- gene_heatmap_obj()
+    req(ht)
+    mat <- ht@matrix
+    draw(ht,
+         heatmap_legend_side    = "right",
+         annotation_legend_side = "right")
+  }, height = function() {
+    ht <- gene_heatmap_obj()
+    mat <- ht@matrix
+    min(400 + nrow(mat)*20, 2000)
+  })
+  
 
   output$download_report <- downloadHandler(
     filename = function() {
@@ -1126,37 +1130,27 @@ server <- function(input, output, session) {
       
     }
   )
+
   output$download_gene_heatmap <- downloadHandler(
     filename = function() {
-      paste0("gene_heatmap_", input$gene_input, "_", input$sample_accession, ".png")
+      paste0("gene_heatmap_", toupper(input$gene_input), "_",
+             input$sample_accession, ".png")
     },
     content = function(file) {
-      on.exit(shinyjs::hide("download_spinner_gene"), add=TRUE)
-      # dynamically compute height
-      num_probes  <- nrow(beta_values)
-      plot_height <- min(400 + num_probes * 20, 2000)
-      # open device
-      png(file, width = 1200, height = plot_height, res = 150)
+      ht  <- gene_heatmap_obj()
+      mat <- ht@matrix
+      h   <- min(400 + nrow(mat)*20, 2000)  # this “h” is in px
       
-      # re-use the same code you have inside renderPlot for heatmap_plot
-      dat <- marker_heatmap_data()  # or your gene‐specific data getter
-      # (make sure you call the same eventReactive that build the gene heatmap)
-      ht <- Heatmap(
-        beta_values,  # your matrix
-        name               = "Beta Value",
-        show_row_names     = TRUE,
-        show_column_names  = FALSE,
-        cluster_rows       = FALSE,
-        cluster_columns    = TRUE,
-        top_annotation     = col.ha,   # your column annotation
-        right_annotation   = row.ha,   # your row annotation
-        col                = colorRamp2(c(0, 0.5, 1), c("blue","white","red")),
-        row_title          = paste("CpG Sites for", toupper(input$gene_input)),
-        column_title       = "Samples",
-        heatmap_legend_param = list(title = "Beta Value")
+      # Ask for a 1200×h pixel image at 150 DPI (or any DPI you like)
+      png(
+        file,
+        width  = 1200,
+        height = h,
+        res    = 150
       )
-      draw(ht, heatmap_legend_side="right", annotation_legend_side="right")
-      
+      draw(ht,
+           heatmap_legend_side    = "right",
+           annotation_legend_side = "right")
       dev.off()
     }
   )
