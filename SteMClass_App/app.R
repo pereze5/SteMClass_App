@@ -7,6 +7,8 @@ library(shinyjs)
 library(thematic)     # For automatic theming of ggplot2 plots
 library(bslib)        # For Bootstrap theming
 library(shinycssloaders)
+library(RColorBrewer)
+library(circlize)
 # Load the trained model, training means, and CpG annotation table
 
 # ==== Streamed file URLs ====
@@ -17,6 +19,17 @@ urls <- list(
   cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
   ref_beta_rds = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.rds"
 )
+
+# 9‐color Blues palette; interpolate to 255
+
+blues_base <- brewer.pal(9, "Blues")
+blues_pal  <- colorRampPalette(blues_base)(255)
+
+heatmap_scale_blues <- colorRamp2(
+  seq(0, 1, length.out = 255),
+  blues_pal
+)
+
 
 
 # Activate thematic for ggplot2 styling based on bs_theme
@@ -822,7 +835,8 @@ server <- function(input, output, session) {
       show_column_names = FALSE,
       cluster_rows      = TRUE,
       cluster_columns   = TRUE,
-      row_title         = paste("CpGs for", dat$marker)
+      row_title         = paste("CpGs for", dat$marker),
+      col                = heatmap_scale_blues
     )
     draw(hm, heatmap_legend_side="right", annotation_legend_side="right")
   }, height=500)
@@ -946,8 +960,7 @@ server <- function(input, output, session) {
           cluster_columns    = TRUE,
           top_annotation     = col.ha,
           right_annotation   = row.ha,
-          col                = colorRamp2(c(0, 0.5, 1),
-                                          c("blue","white","red")),
+          col                = heatmap_scale_blues,
           row_title          = paste("CpG Sites for", gene_name),
           column_title       = "Samples",
           heatmap_legend_param = list(title = "Beta Value")
