@@ -15,7 +15,7 @@ urls <- list(
   model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
   train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
   train_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
-  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
+  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top20k_marker.txt",
   ref_beta_rds = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.rds"
 )
 
