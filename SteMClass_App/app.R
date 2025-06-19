@@ -7,7 +7,8 @@ library(shinyjs)
 library(thematic)     # For automatic theming of ggplot2 plots
 library(bslib)        # For Bootstrap theming
 library(shinycssloaders)
-
+library(RColorBrewer)
+library(circlize)
 # Load the trained model, training means, and CpG annotation table
 
 # ==== Streamed file URLs ====
@@ -15,11 +16,19 @@ urls <- list(
   model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
   train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
   train_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
-  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top20k_marker.txt",
+  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top20k_marker_ordered.txt",
   ref_beta_rds = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.rds"
 )
 
+# 9‐color Blues palette; interpolate to 255
 
+blues_base <- brewer.pal(9, "Blues")
+blues_pal  <- colorRampPalette(blues_base)(255)
+
+heatmap_scale_blues <- colorRamp2(
+  seq(0, 1, length.out = 255),
+  blues_pal
+)
 
 
 
@@ -189,7 +198,7 @@ ui <- navbarPage(
         h4("Instructions:"),
         tags$ol(
           tags$li('Generate a heatmap that visualizes the global DNA methylation profiles of the test sample and reference set.'),
-          tags$li("The heatmap will use the top 10,000 CpG sites that distinguish the selected cell state from iPSC.")
+          tags$li("The heatmap will use the top 20,000 CpG sites that distinguish the selected cell state from iPSC.")
         )
       ),
       
@@ -632,8 +641,11 @@ server <- function(input, output, session) {
         x     = "Class",
         y     = "Probability"
       ) +
-      ylim(0, 1)  +
-      scale_y_continuous(breaks = seq(0, 1, by = 0.1))+
+      scale_y_continuous(
+        limits = c(0, 1),                # force axis 0–1
+        breaks = seq(0, 1, by = 0.1),    # ticks every 0.1
+        expand = c(0, 0)                 # no padding
+      ) +
       theme_minimal(base_size = 14) +
       theme(
         plot.title     = element_text(hjust = 0.5, face = "bold"),
@@ -807,15 +819,6 @@ server <- function(input, output, session) {
   output$marker_heatmap_plot <- renderPlot({
     dat <- marker_heatmap_data()
     req(dat)
-    # 9‐color Blues palette; interpolate to 255
-    
-    blues_base <- brewer.pal(9, "Blues")
-    blues_pal  <- colorRampPalette(blues_base)(255)
-    
-    heatmap_scale_blues <- colorRamp2(
-      seq(0, 1, length.out = 255),
-      blues_pal
-    )
     
     hm <- Heatmap(
       dat$beta,
@@ -948,15 +951,6 @@ server <- function(input, output, session) {
       # dynamically compute height
       num_probes  <- nrow(beta_values)
       plot_height <- min(400 + num_probes * 20, 2000)
-      # 9‐color Blues palette; interpolate to 255
-      
-      blues_base <- brewer.pal(9, "Blues")
-      blues_pal  <- colorRampPalette(blues_base)(255)
-      
-      heatmap_scale_blues <- colorRamp2(
-        seq(0, 1, length.out = 255),
-        blues_pal
-      )
       
       # 5) render the heatmap
       incProgress(0.2, detail = "Rendering heatmap…")
