@@ -7,8 +7,7 @@ library(shinyjs)
 library(thematic)     # For automatic theming of ggplot2 plots
 library(bslib)        # For Bootstrap theming
 library(shinycssloaders)
-library(RColorBrewer)
-library(circlize)
+
 # Load the trained model, training means, and CpG annotation table
 
 # ==== Streamed file URLs ====
@@ -20,15 +19,7 @@ urls <- list(
   ref_beta_rds = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.rds"
 )
 
-# 9‐color Blues palette; interpolate to 255
 
-blues_base <- brewer.pal(9, "Blues")
-blues_pal  <- colorRampPalette(blues_base)(255)
-
-heatmap_scale_blues <- colorRamp2(
-  seq(0, 1, length.out = 255),
-  blues_pal
-)
 
 
 
@@ -816,6 +807,15 @@ server <- function(input, output, session) {
   output$marker_heatmap_plot <- renderPlot({
     dat <- marker_heatmap_data()
     req(dat)
+    # 9‐color Blues palette; interpolate to 255
+    
+    blues_base <- brewer.pal(9, "Blues")
+    blues_pal  <- colorRampPalette(blues_base)(255)
+    
+    heatmap_scale_blues <- colorRamp2(
+      seq(0, 1, length.out = 255),
+      blues_pal
+    )
     
     hm <- Heatmap(
       dat$beta,
@@ -948,6 +948,15 @@ server <- function(input, output, session) {
       # dynamically compute height
       num_probes  <- nrow(beta_values)
       plot_height <- min(400 + num_probes * 20, 2000)
+      # 9‐color Blues palette; interpolate to 255
+      
+      blues_base <- brewer.pal(9, "Blues")
+      blues_pal  <- colorRampPalette(blues_base)(255)
+      
+      heatmap_scale_blues <- colorRamp2(
+        seq(0, 1, length.out = 255),
+        blues_pal
+      )
       
       # 5) render the heatmap
       incProgress(0.2, detail = "Rendering heatmap…")
