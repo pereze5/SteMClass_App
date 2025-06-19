@@ -16,7 +16,7 @@ urls <- list(
   model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
   train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
   train_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
-  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top20k_marker_ordered.txt",
+  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
   ref_beta_rds = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.rds"
 )
 
@@ -198,7 +198,7 @@ ui <- navbarPage(
         h4("Instructions:"),
         tags$ol(
           tags$li('Generate a heatmap that visualizes the global DNA methylation profiles of the test sample and reference set.'),
-          tags$li("The heatmap will use the top 20,000 CpG sites that distinguish the selected cell state from iPSC.")
+          tags$li("The heatmap will use the top 10,000 CpG sites that distinguish the selected cell state from iPSC.")
         )
       ),
       
@@ -1138,7 +1138,8 @@ server <- function(input, output, session) {
         show_column_names = FALSE,
         cluster_rows      = TRUE,
         cluster_columns   = TRUE,
-        row_title         = paste("CpGs for", dat$marker)
+        row_title         = paste("CpGs for", dat$marker),
+        col                = heatmap_scale_blues
       )
       draw(ht, heatmap_legend_side="right", annotation_legend_side="right")
       
