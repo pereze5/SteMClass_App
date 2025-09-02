@@ -110,7 +110,7 @@ ui <- navbarPage(
           multiple = TRUE,
           accept   = ".idat"
         ),
-        # Wrap your form inputs in one div
+        
         tags$div(
           id = "form",
           
@@ -155,15 +155,15 @@ ui <- navbarPage(
             tags$li("Click “Run Classification” to classify the sample."),
             tags$li("Click “New Analysis” to classify a new sample.")
           )
-        )  # end tags$div(id="form", ...)
-      ),   # end sidebarPanel()
+        ) 
+      ),  
       
       mainPanel(
         div(style = "position: relative; padding-bottom: 60px;",
             uiOutput("classification_ui"))
         )
-      )# end sidebarLayout()
-  ),       # end tabPanel()
+      )
+  ),    
   tabPanel(
     title = "Sample Visualization",
     sidebarLayout(
@@ -247,7 +247,7 @@ ui <- navbarPage(
           selected = "Ectoderm"
         ),
         
-        # your existing gene text input
+        
         textInput(
           inputId = "gene_input",
           label   = "Enter Gene Name:",
@@ -347,7 +347,7 @@ server <- function(input, output, session) {
       rgSet <- read.metharray.exp(base = tmp, targets = targets)
       sampleNames(rgSet) <- targets$Sample_accession
       
-      # 3. Preprocess (split out each branch so we can show progress)
+      # Preprocess (split out each branch so we can show progress)
       
       if (input$array_version == "EPICv2") {
         incProgress(0.3, detail = "Preprocessing (Noob)…")
@@ -390,7 +390,7 @@ server <- function(input, output, session) {
         stop("Unknown array version: ", input$array_version)
       }
       
-      # 4. Finalise
+      # Finalise
       incProgress(0.1, detail = "Finalizing…")
       beta_mat <- t(beta)
       
@@ -454,9 +454,10 @@ server <- function(input, output, session) {
     req(beta_data(), training_data(), sample_anno())
     
     withProgress(message = "Running classification", value = 0, {
-      # ===== Read files directly into memory =====
+      # Read annotation directly into memory 
       sample_anno <- sample_anno()
-      
+
+      # Read training data directly into memory 
       train_data <- training_data()
       
       # Load model directly from URL
@@ -466,18 +467,18 @@ server <- function(input, output, session) {
       ref_beta <- ref_beta()
       
       
-      # 2) our imputation recipe exactly as in model development
+      # prepare our imputation recipe exactly as in model development
       rf_recipe    <- recipe(Class~ ., data = train_data) %>%
         step_impute_median(all_predictors())
       
-      # 3) learn the medians
+      # Learn the medians
       prepped_rec  <- prep(rf_recipe, training = train_data, retain = TRUE)
       
       prob_cols    <- c("Astrocyte","Ectoderm","Endoderm",
                         "Endothelial","iPSC","Lung",
                         "Mesoderm","NSC")
-      
-      # 1) pull out your sample
+      # Prediciton
+      # 1) pull out test sample
       incProgress(0.1, detail = "Extracting sample…")
       sample_name <- input$sample_accession
       test_sample <- beta_data()
@@ -579,7 +580,7 @@ server <- function(input, output, session) {
     req(res)
     
     sample_name     <- res$results$Sample
-    predicted_class <- res$prediction    # raw output, e.g. "reject"
+    predicted_class <- res$prediction    
     
     # Decide what to show for class & score
     display_class <- if (predicted_class == "reject") {
@@ -642,9 +643,9 @@ server <- function(input, output, session) {
         y     = "Probability"
       ) +
       scale_y_continuous(
-        limits = c(0, 1),                # force axis 0–1
-        breaks = seq(0, 1, by = 0.1),    # ticks every 0.1
-        expand = c(0, 0)                 # no padding
+        limits = c(0, 1),                
+        breaks = seq(0, 1, by = 0.1),    
+        expand = c(0, 0)                 
       ) +
       theme_minimal(base_size = 14) +
       theme(
@@ -667,16 +668,16 @@ server <- function(input, output, session) {
     isolate({
       withProgress(message = "Generating UMAP", value = 0, {
         
-        # 1) pull in the baked test sample
+        # pull in the baked test sample
         incProgress(0.1, detail = "Extracting test sample…")
         req(classification())
         test_sample <- classification()$test_sample
         
-        # 2) grab training data
+        # grab training data
         incProgress(0.1, detail = "Loading training data…")
         train_df <- training_data()
         
-        # 3) feature alignment
+        # feature alignment
         incProgress(0.1, detail = "Aligning features…")
         feature_cols <- colnames(test_sample)
         missing_train <- setdiff(feature_cols, colnames(train_df))
@@ -686,11 +687,11 @@ server <- function(input, output, session) {
         }
         train_features <- train_df[, ..feature_cols]
         
-        # 4) combine datasets
+        # combine datasets
         incProgress(0.1, detail = "Combining data…")
         combined_data <- rbind(train_features, test_sample)
         
-        # 5) prepare labels
+        # prepare labels
         incProgress(0.1, detail = "Preparing labels…")
         if (!"Class" %in% colnames(train_df)) {
           stop("training_data() must contain a 'Class' column")
@@ -701,7 +702,7 @@ server <- function(input, output, session) {
           levels = c(unique(as.character(train_labels)), "Test Sample")
         )
         
-        # 6) run UMAP
+        # run UMAP
         incProgress(0.4, detail = "Running UMAP…")
         set.seed(123)
         umap_res <- uwot::umap(
@@ -711,7 +712,7 @@ server <- function(input, output, session) {
           metric       = "euclidean"
         )
         
-        # 7) build plotting frame
+        # build plotting frame
         incProgress(0.1, detail = "Creating plot…")
         umap_df <- data.frame(
           UMAP1       = umap_res[,1],
@@ -721,7 +722,7 @@ server <- function(input, output, session) {
                             c(length(train_labels), nrow(test_sample)))
         )
         
-        # 8) final plot
+        # final plot
         ggplot(umap_df, aes(x = UMAP1, y = UMAP2,
                             color = Label, shape = Sample_Type)) +
           geom_point(size = 3, alpha = 0.8) +
@@ -762,10 +763,7 @@ server <- function(input, output, session) {
     ann450K <- ann450K()
     marker      <- input$marker
     sample_name <- input$sample_accession
-    
-    # 1) grab your marker CpGs
-    # 1) figure out which CpGs belong to this marker
-    # 5) Read your annotation with Marker info
+  
 
     probes_for_marker <- ann450K %>% filter(Marker == marker)
     if (nrow(probes_for_marker) == 0) {
@@ -789,7 +787,7 @@ server <- function(input, output, session) {
     colnames(test_mat) <- sample_name
     
     
-    # 3) bind test sample & build annotation
+    # bind test sample & build annotation
     sample_anno <- sample_anno()
     
     ref_anno_full    <- sample_anno[match(colnames(beta_values_ref),
@@ -815,7 +813,6 @@ server <- function(input, output, session) {
     )
   })
   
-  # 2) your renderPlot sits _outside_ any observeEvent:
   output$marker_heatmap_plot <- renderPlot({
     dat <- marker_heatmap_data()
     req(dat)
@@ -845,13 +842,13 @@ server <- function(input, output, session) {
   }, height=500)
       
   
-  # 1) Build a Heatmap object when the user clicks “Plot Heatmap”
+  # Build a Heatmap object when the user clicks “Plot Heatmap”
   gene_heatmap_obj <- eventReactive(input$plot_button, {
     req(beta_data(), input$gene_input, input$celltype, ann450K(), ref_beta(), sample_anno())
     
     withProgress(message = "Generating gene‐level heatmap", value = 0, {
       ref_beta <- ref_beta()
-      # 1) look up probes for this gene
+      # look up probes for this gene
       incProgress(0.1, detail = "Finding CpGs for gene…")
       celltype    <- input$celltype
       sample_name <- input$sample_accession
@@ -869,7 +866,7 @@ server <- function(input, output, session) {
       }
       cpg_ids <- probes_for_gene$Name
       
-      # 2) filter bvals
+      # filter bvals
       incProgress(0.3, detail = "Filtering beta values")
       # Filter to CpGs of interest in ref_beta
       
@@ -918,7 +915,7 @@ server <- function(input, output, session) {
         annotation_legend_param = list(Cell_Type = list(title = "Cell Type"))
       )
       
-      # 4) row annotations & sorting
+      # row annotations & sorting
       incProgress(0.2, detail = "Sorting CpGs & building row annotations…")
       probes_in_heatmap <- rownames(beta_values)
       ann450K_heatmap   <- ann450K[match(probes_in_heatmap, ann450K$Name), ]
@@ -952,7 +949,7 @@ server <- function(input, output, session) {
       num_probes  <- nrow(beta_values)
       plot_height <- min(400 + num_probes * 20, 2000)
       
-      # 5) render the heatmap
+      # render the heatmap
       incProgress(0.2, detail = "Rendering heatmap…")
         Heatmap(
           beta_values,
@@ -972,7 +969,7 @@ server <- function(input, output, session) {
         
   })
   
-  # 2) Render the heatmap onscreen
+  # Render the heatmap onscreen
   output$heatmap_plot <- renderPlot({
     ht <- gene_heatmap_obj()
     req(ht)
@@ -992,13 +989,13 @@ server <- function(input, output, session) {
       paste0("classification_report_", input$sample_accession, ".html")
     },
     content = function(file) {
-      # 1) copy the template
+      # copy the report template
       tempRmd <- file.path(tempdir(), "report.Rmd")
       file.copy("report.Rmd", tempRmd, overwrite = TRUE)
-      # 2) copy the CSS alongside it
+      # copy the CSS alongside it
       tempCss <- file.path(tempdir(), "report.css")
       file.copy("report.css", tempCss, overwrite = TRUE)
-      # 3) recreate the summary text
+      # recreate the summary text
       res <- classification()
       req(res)
       
@@ -1012,7 +1009,7 @@ server <- function(input, output, session) {
         else round(as.numeric(res$probabilities[[predicted_class]]),3)
       )
       
-      # 4) rebuild the two plots exactly as before
+      # rebuild the two plots exactly as before
       prob_plot <- { 
         res <- classification()
         req(res)
@@ -1089,7 +1086,7 @@ server <- function(input, output, session) {
           scale_shape_manual(values=c("Training"=16,"Test"=17))
       }
       
-      # 4) render the HTML
+      # render the HTML
       rmarkdown::render(
         tempRmd,
         output_file = file,
@@ -1177,6 +1174,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
+
 
 
 
