@@ -16,8 +16,7 @@ urls <- list(
   model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
   train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
   train_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
-  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
-  ref_beta_rds = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/SteMClass_refset.rds"
+  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt"
 )
 
 # 9‐color Blues palette; interpolate to 255
@@ -427,13 +426,7 @@ server <- function(input, output, session) {
     train_data
   })
   
-  
-  # Reactive expression to wrap the reference beta matrix
-  ref_beta <- reactive({
-    # with rownames = sample IDs and a column "Class"
-    ref_beta <- readRDS(url(urls$ref_beta_rds))
-    ref_beta
-  })
+
   
   # Reactive expression to wrap the CpG anno
   ann450K <- reactive({
@@ -449,6 +442,22 @@ server <- function(input, output, session) {
     sample_anno
   })
   
+  # Reactive expression to wrap the reference beta matrix
+  ref_beta <- reactive({
+    td <- training_data()
+    sa <- sample_anno()
+    
+    # Drop the class column, keep only CpGs
+    beta_mat <- td[, !c("Class"), with = FALSE]
+    
+    # Transpose so rows = CpGs, cols = samples
+    beta_mat <- t(as.matrix(beta_mat))
+    
+    # Set column names from sample annotation
+    colnames(beta_mat) <- sa$Sample_accession
+    
+    beta_mat
+  })
   
   classification <- eventReactive(input$classify, {
     req(beta_data(), training_data(), sample_anno())
@@ -745,11 +754,11 @@ server <- function(input, output, session) {
             "NSC"          = "#0072B2",
             "Endoderm"     = "#a6dba0",
             "Lung"         = "#238b45",
-            "Test Sample"  = "#000000"
+            "Test Sample"  = "#FF00FF"
           )) +
           scale_shape_manual(values = c(
             "Training Sample" = 16,
-            "Test Sample"     = 17
+            "Test Sample"     = 18
           ))
       })
     })
