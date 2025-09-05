@@ -83,6 +83,8 @@ At runtime the app streams:
 ## Scope & limitations
 
 -   Designed for **one sample per run** via the UI.
+
+-   Currently the model characterizes 8 distinct differentiation states (see https://doi.org/10.1101/2025.09.02.673063 for details).
     
 -   The **probability threshold** (0.6) governs the reject decision.
     
