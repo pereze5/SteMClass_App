@@ -16,7 +16,7 @@ SteMClass is a DNA methylation-based classifier for the characterisation of iPSC
 
 All model artifacts and reference data are **streamed at runtime** from GitHub Releases; no large local bundles are included in the repo.
 
-## How to use (hosted app)
+## How to use the app (~10 minutes per sample)
 
 1.  Open the **hosted SteMClass app** (https://pereze5-stemclass.share.connect.posit.cloud/).
     
