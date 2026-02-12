@@ -1,6 +1,4 @@
 
-
-
 options(shiny.maxRequestSize = 30*1024^2)
 
 library(shinyjs)
@@ -31,7 +29,46 @@ heatmap_scale_blues <- colorRamp2(
   blues_pal
 )
 
-
+apply_calibrator <- function(cal_obj, raw_prob_df, class_names) {
+  # raw_prob_df must have columns == class_names in that order
+  stopifnot(all(class_names %in% colnames(raw_prob_df)))
+  
+  X <- as.matrix(raw_prob_df[, class_names, drop = FALSE])
+  
+  # Case A: tidymodels workflow (or parsnip fit) that supports predict(type="prob")
+  if (inherits(cal_obj, "workflow")) {
+    # workflow predict() usually returns tibble of class probs
+    p <- predict(cal_obj, new_data = as.data.frame(X), type = "prob")
+    # Ensure column names are exactly class_names
+    colnames(p) <- gsub("^\\.pred_", "", colnames(p))
+    p <- p[, class_names, drop = FALSE]
+    return(as_tibble(p))
+  }
+  
+  # Case B: glmnet model (cv.glmnet or glmnet)
+  if (inherits(cal_obj, "cv.glmnet") || inherits(cal_obj, "glmnet")) {
+    # Use lambda.1se if available (per your description); else lambda.min; else s not needed
+    s_val <- NULL
+    if (!is.null(cal_obj$lambda.1se)) s_val <- "lambda.1se"
+    if (is.null(s_val) && !is.null(cal_obj$lambda.min)) s_val <- "lambda.min"
+    
+    # Prefer type="response" for multinomial, which returns probabilities
+    p_arr <- if (!is.null(s_val)) {
+      predict(cal_obj, newx = X, s = s_val, type = "response")
+    } else {
+      predict(cal_obj, newx = X, type = "response")
+    }
+    
+    # glmnet multinomial predict(type="response") returns an array: n x K x 1
+    if (length(dim(p_arr)) == 3) p_mat <- p_arr[, , 1, drop = FALSE] else p_mat <- p_arr
+    
+    # Set class names (glmnet often carries dimnames; but enforce)
+    colnames(p_mat) <- class_names
+    return(as_tibble(p_mat))
+  }
+  
+  stop("Unsupported calibration object type: ", paste(class(cal_obj), collapse = ", "))
+}
 
 # Activate thematic for ggplot2 styling based on bs_theme
 thematic::thematic_shiny()
@@ -540,6 +577,47 @@ server <- function(input, output, session) {
       
       # 4) predict
       incProgress(0.4, detail = "Predicting…")
+      apply_calibrator <- function(cal_obj, raw_prob_df, class_names) {
+        # raw_prob_df must have columns == class_names in that order
+        stopifnot(all(class_names %in% colnames(raw_prob_df)))
+        
+        X <- as.matrix(raw_prob_df[, class_names, drop = FALSE])
+        
+        # Case A: tidymodels workflow (or parsnip fit) that supports predict(type="prob")
+        if (inherits(cal_obj, "workflow")) {
+          # workflow predict() usually returns tibble of class probs
+          p <- predict(cal_obj, new_data = as.data.frame(X), type = "prob")
+          # Ensure column names are exactly class_names
+          colnames(p) <- gsub("^\\.pred_", "", colnames(p))
+          p <- p[, class_names, drop = FALSE]
+          return(as_tibble(p))
+        }
+        
+        # Case B: glmnet model (cv.glmnet or glmnet)
+        if (inherits(cal_obj, "cv.glmnet") || inherits(cal_obj, "glmnet")) {
+          # Use lambda.1se if available (per your description); else lambda.min; else s not needed
+          s_val <- NULL
+          if (!is.null(cal_obj$lambda.1se)) s_val <- "lambda.1se"
+          if (is.null(s_val) && !is.null(cal_obj$lambda.min)) s_val <- "lambda.min"
+          
+          # Prefer type="response" for multinomial, which returns probabilities
+          p_arr <- if (!is.null(s_val)) {
+            predict(cal_obj, newx = X, s = s_val, type = "response")
+          } else {
+            predict(cal_obj, newx = X, type = "response")
+          }
+          
+          # glmnet multinomial predict(type="response") returns an array: n x K x 1
+          if (length(dim(p_arr)) == 3) p_mat <- p_arr[, , 1, drop = FALSE] else p_mat <- p_arr
+          
+          # Set class names (glmnet often carries dimnames; but enforce)
+          colnames(p_mat) <- class_names
+          return(as_tibble(p_mat))
+        }
+        
+        stop("Unsupported calibration object type: ", paste(class(cal_obj), collapse = ", "))
+      }
+      
       predict_calibrated <- function(
     new_data,
     rf_fit_path  = url(urls$model),
@@ -1242,7 +1320,6 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
-
 
 
 
