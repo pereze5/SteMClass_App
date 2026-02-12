@@ -14,7 +14,7 @@ library(circlize)
 # ==== Streamed file URLs ====
 urls <- list(
   model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_prob.rds",
-  train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
+  train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_targets.txt",
   marker_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_marker_data.txt",
   cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
   train_data = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_data.txt",
@@ -1242,6 +1242,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
+
 
 
 
