@@ -7,6 +7,13 @@ library(bslib)        # For Bootstrap theming
 library(shinycssloaders)
 library(RColorBrewer)
 library(circlize)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(stringr)
+library(glmnet)
+library(yardstick)
+library(glue)
 # Load the trained model, training means, and CpG annotation table
 
 # ==== Streamed file URLs ====
@@ -1320,6 +1327,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
+
 
 
 
