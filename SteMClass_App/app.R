@@ -13,10 +13,12 @@ library(circlize)
 
 # ==== Streamed file URLs ====
 urls <- list(
-  model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_no_cal.rds",
+  model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_prob.rds",
   train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_targets.txt",
-  train_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_train_data.txt",
-  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt"
+  marker_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_marker_data.txt",
+  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
+  train_data = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_data.txt",
+  cal_model = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/calibration_model_deploy.rds"
 )
 
 # 9‐color Blues palette; interpolate to 255
@@ -160,8 +162,8 @@ ui <- navbarPage(
       mainPanel(
         div(style = "position: relative; padding-bottom: 60px;",
             uiOutput("classification_ui"))
-        )
       )
+    )
   ),    
   tabPanel(
     title = "Sample Visualization",
@@ -357,7 +359,7 @@ server <- function(input, output, session) {
         incProgress(0.05, detail = "Converting to 450K…")
         mSetv1 <- readRDS("Mset1_EPICv2_sample_combinearrays.rds")
         mSet450_all <- combineArrays(mSetv2,mSetv1,
-                               outType = "IlluminaHumanMethylation450k")
+                                     outType = "IlluminaHumanMethylation450k")
         mSet <- mSet450_all[, sampleNames(mSetv2)]
         
         incProgress(0.1, detail = "Mapping to genome…")
@@ -371,7 +373,7 @@ server <- function(input, output, session) {
         
         incProgress(0.05, detail = "Converting to 450K…")
         mSet <- convertArray(mSet,
-                               outType = "IlluminaHumanMethylation450k")
+                             outType = "IlluminaHumanMethylation450k")
         
         incProgress(0.2, detail = "Mapping to genome…")
         mSetSq <- mapToGenome(mSet)
@@ -398,8 +400,8 @@ server <- function(input, output, session) {
     })
   })
   
- 
-
+  
+  
   observeEvent(input$load_samples, {
     req(beta_data())
     
@@ -426,7 +428,17 @@ server <- function(input, output, session) {
     train_data
   })
   
-
+  # Reactive expression to wrap the marker data
+  marker_data <- reactive({
+    # with rownames = sample IDs and a column "Class"
+    marker_data <- data.table::fread(urls$marker_data)
+    marker_data$Class <- factor(marker_data$Class_rf)
+    marker_data <- marker_data[, !names(marker_data) %in% "Class_rf", with = FALSE]
+    if (!"Class" %in% colnames(marker_data)) {
+      stop("Global marker_data must contain a column named 'Class'")
+    }
+    marker_data
+  })
   
   # Reactive expression to wrap the CpG anno
   ann450K <- reactive({
@@ -435,7 +447,7 @@ server <- function(input, output, session) {
     ann450K
   })
   
-  # Reactive expression to wrap the training set sample anno
+  # Reactive expression to wrap the marker set sample anno
   sample_anno <- reactive({
     sample_anno <- data.table::fread(urls$train_anno)
     sample_anno$Class <- as.factor(sample_anno$Class_rf)
@@ -459,13 +471,30 @@ server <- function(input, output, session) {
     beta_mat
   })
   
+  # Reactive expression to wrap the marker beta matrix
+  marker_beta <- reactive({
+    md <- marker_data()
+    sa <- sample_anno()
+    
+    # Drop the class column, keep only CpGs
+    beta_mat <- md[, !c("Class"), with = FALSE]
+    
+    # Transpose so rows = CpGs, cols = samples
+    beta_mat <- t(as.matrix(beta_mat))
+    
+    # Set column names from sample annotation
+    colnames(beta_mat) <- sa$Sample_accession
+    
+    beta_mat
+  })
+  
   classification <- eventReactive(input$classify, {
     req(beta_data(), training_data(), sample_anno())
     
     withProgress(message = "Running classification", value = 0, {
       # Read annotation directly into memory 
       sample_anno <- sample_anno()
-
+      
       # Read training data directly into memory 
       train_data <- training_data()
       
@@ -511,35 +540,65 @@ server <- function(input, output, session) {
       
       # 4) predict
       incProgress(0.4, detail = "Predicting…")
-      predict_raw <- function(new_data, threshold = 0.6) {
-        # 1) predict raw probabilities
-        raw_probs <- predict(rf_fit, new_data = new_data, type = "prob")
+      predict_calibrated <- function(
+    new_data,
+    rf_fit_path  = url(urls$model),
+    cal_path     = url(urls$cal_model),
+    class_names  = c("Astrocyte","Ectoderm","Endoderm","Endothelial","iPSC","Lung","Mesoderm","NSC"),
+    threshold    = 0.5,         
+    apply_reject = TRUE
+      ) {
+        # 1) Load model bundle + calibrator
+        rf_bundle <- readRDS(rf_fit_path)
+        cal_deploy <- readRDS(cal_path)
         
-        # 2) rename columns from .pred_Class → Class
-        raw_probs <- raw_probs %>%
-          rename_with(~ str_remove(.x, "^\\.pred_"), starts_with(".pred_"))
+        # in case need to use bundled clas and prob rds:
+        rf_fit <- if (is.list(rf_bundle) && "model_fit" %in% names(rf_bundle)) rf_bundle$model_fit else rf_bundle
         
-        # 3) apply threshold logic
-        prob_cols <- colnames(raw_probs)
-        out_df <- raw_probs %>%
-          rowwise() %>%
-          mutate(
-            max_prob   = max(c_across(all_of(prob_cols)), na.rm = TRUE),
-            pred_class = if (max_prob > threshold) {
-              prob_cols[which.max(c_across(all_of(prob_cols)))]
-            } else {
-              "reject"
-            }
-          ) %>%
-          ungroup() %>%
-          mutate(pred_class = factor(pred_class, levels = c(prob_cols, "reject")))
+        # 2) RF raw probabilities
+        raw_probs <- predict(rf_fit, new_data = new_data, type = "prob") %>% as_tibble()
+        colnames(raw_probs) <- gsub("^\\.pred_", "", colnames(raw_probs))
         
-        return(out_df)
+        # Ensure class order and presence
+        missing <- setdiff(class_names, colnames(raw_probs))
+        if (length(missing) > 0) stop("RF probability output missing classes: ", paste(missing, collapse = ", "))
+        raw_probs <- raw_probs[, class_names, drop = FALSE]
+        
+        # 3) Apply calibration model to raw probs
+        cal_obj <- cal_deploy
+        if (is.list(cal_obj) && "cv" %in% names(cal_obj)) cal_obj <- cal_obj$cv
+        cal_probs <- apply_calibrator(cal_obj, raw_probs, class_names)
+        
+        
+        # 4) rejection + predicted class using calibrated probs
+        if (apply_reject) {
+          max_prob <- do.call(pmax, cal_probs)
+          argmax <- class_names[max.col(as.matrix(cal_probs), ties.method = "first")]
+          pred_class <- ifelse(max_prob < threshold, REJECT_LABEL, argmax)
+          
+          out <- bind_cols(
+            raw_probs %>% rename_with(~ paste0("raw_", .x)),
+            cal_probs %>% rename_with(~ paste0("cal_", .x)),
+            tibble(
+              cal_max_prob = max_prob,
+              cal_pred     = factor(pred_class, levels = c(class_names, REJECT_LABEL))
+            )
+          )
+        } else {
+          out <- bind_cols(
+            raw_probs %>% rename_with(~ paste0("raw_", .x)),
+            cal_probs %>% rename_with(~ paste0("cal_", .x))
+          )
+        }
+        
+        out
       }
-      pred_df <- predict_raw(
-        new_data    = baked,
-        threshold   = 0.6
+      pred_df <- predict_calibrated(
+        new_data    = baked,      # must match RF workflow feature columns / recipe
+        threshold   = 0.5,
+        apply_reject = TRUE
       )
+      
       
       # 5) collect results
       incProgress(0.1, detail = "Collecting results…")
@@ -636,7 +695,7 @@ server <- function(input, output, session) {
       geom_col(width = 0.6) +
       # cutoff line at 0.6
       geom_hline(
-        yintercept = 0.6,
+        yintercept = 0.5,
         linetype   = "dashed",
         color      = "#6c757d",
         size       = 0.8
@@ -766,14 +825,14 @@ server <- function(input, output, session) {
   
   
   marker_heatmap_data <- eventReactive(input$marker_plot_button, {
-    req(beta_data(), input$sample_accession, ref_beta(), ann450K(), sample_anno())
+    req(beta_data(), input$sample_accession, marker_beta(), ann450K(), sample_anno())
     # Load reference beta matrix (row = CpGs, col = samples)
-    ref_beta <- ref_beta()
+    marker_beta <- marker_beta()
     ann450K <- ann450K()
     marker      <- input$marker
     sample_name <- input$sample_accession
-  
-
+    
+    
     probes_for_marker <- ann450K %>% filter(Marker == marker)
     if (nrow(probes_for_marker) == 0) {
       showNotification("No CpG probes found for that marker.", type = "error")
@@ -783,13 +842,13 @@ server <- function(input, output, session) {
     cpg_ids <- probes_for_marker$Name
     
     
-    # Filter to CpGs of interest in ref_beta
-    common_cpgs <- intersect(cpg_ids, intersect(rownames(ref_beta), colnames(beta_data())))
+    # Filter to CpGs of interest in marker_beta
+    common_cpgs <- intersect(cpg_ids, intersect(rownames(marker_beta), colnames(beta_data())))
     if (length(common_cpgs) == 0) {
       showNotification("No shared CpGs found between reference and sample for this gene.", type = "error")
       return(NULL)
     }
-    beta_values_ref <- ref_beta[common_cpgs, , drop = FALSE]
+    beta_values_ref <- marker_beta[common_cpgs, , drop = FALSE]
     test_vec        <- beta_data()[, common_cpgs, drop = FALSE]
     test_mat        <- t(test_vec)
     rownames(test_mat) <- common_cpgs
@@ -849,14 +908,14 @@ server <- function(input, output, session) {
     )
     draw(hm, heatmap_legend_side="right", annotation_legend_side="right")
   }, height=500)
-      
+  
   
   # Build a Heatmap object when the user clicks “Plot Heatmap”
   gene_heatmap_obj <- eventReactive(input$plot_button, {
-    req(beta_data(), input$gene_input, input$celltype, ann450K(), ref_beta(), sample_anno())
+    req(beta_data(), input$gene_input, input$celltype, ann450K(), marker_data(), sample_anno())
     
     withProgress(message = "Generating gene‐level heatmap", value = 0, {
-      ref_beta <- ref_beta()
+      marker_data <- marker_data()
       # look up probes for this gene
       incProgress(0.1, detail = "Finding CpGs for gene…")
       celltype    <- input$celltype
@@ -877,14 +936,14 @@ server <- function(input, output, session) {
       
       # filter bvals
       incProgress(0.3, detail = "Filtering beta values")
-      # Filter to CpGs of interest in ref_beta
+      # Filter to CpGs of interest in marker_data
       
-      common_cpgs <- intersect(cpg_ids, intersect(rownames(ref_beta), colnames(beta_data())))
+      common_cpgs <- intersect(cpg_ids, intersect(rownames(marker_data), colnames(beta_data())))
       if (length(common_cpgs) == 0) {
         showNotification("No shared CpGs found between reference and sample for this gene.", type = "error")
         return(NULL)
       }
-      beta_values_ref <- ref_beta[common_cpgs, , drop = FALSE]
+      beta_values_ref <- marker_data[common_cpgs, , drop = FALSE]
       test_vec        <- beta_data()[, common_cpgs, drop = FALSE]
       test_mat        <- t(test_vec)
       rownames(test_mat) <- common_cpgs
@@ -960,22 +1019,22 @@ server <- function(input, output, session) {
       
       # render the heatmap
       incProgress(0.2, detail = "Rendering heatmap…")
-        Heatmap(
-          beta_values,
-          name               = "Beta Value",
-          show_row_names     = TRUE,
-          show_column_names  = FALSE,
-          cluster_rows       = FALSE,
-          cluster_columns    = TRUE,
-          top_annotation     = col.ha,
-          right_annotation   = row.ha,
-          col                = heatmap_scale_blues,
-          row_title          = paste("CpG Sites for", gene_name),
-          column_title       = "Samples",
-          heatmap_legend_param = list(title = "Beta Value")
-        )
+      Heatmap(
+        beta_values,
+        name               = "Beta Value",
+        show_row_names     = TRUE,
+        show_column_names  = FALSE,
+        cluster_rows       = FALSE,
+        cluster_columns    = TRUE,
+        top_annotation     = col.ha,
+        right_annotation   = row.ha,
+        col                = heatmap_scale_blues,
+        row_title          = paste("CpG Sites for", gene_name),
+        column_title       = "Samples",
+        heatmap_legend_param = list(title = "Beta Value")
+      )
     })
-        
+    
   })
   
   # Render the heatmap onscreen
@@ -992,7 +1051,7 @@ server <- function(input, output, session) {
     min(400 + nrow(mat)*20, 2000)
   })
   
-
+  
   output$download_report <- downloadHandler(
     filename = function() {
       paste0("classification_report_", input$sample_accession, ".html")
@@ -1153,7 +1212,7 @@ server <- function(input, output, session) {
       
     }
   )
-
+  
   output$download_gene_heatmap <- downloadHandler(
     filename = function() {
       paste0("gene_heatmap_", toupper(input$gene_input), "_",
@@ -1183,6 +1242,9 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
+
+
+
 
 
 
