@@ -385,10 +385,11 @@ server <- function(input, output, session) {
       library(circlize)     # For colorRamp2 function used in heatmap
       library(cachem)
       library(purrr)
-library(stringr)
-library(glmnet)
-library(yardstick)
-library(glue)
+      library(stringr)
+      library(glmnet)
+      library(yardstick)
+      library(glue)
+      library(textshape)
       
       rgSet <- read.metharray.exp(base = tmp, targets = targets)
       sampleNames(rgSet) <- targets$Sample_accession
@@ -1328,6 +1329,7 @@ library(glue)
 }
 
 shinyApp(ui = ui, server = server)
+
 
 
 
