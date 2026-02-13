@@ -690,25 +690,41 @@ server <- function(input, output, session) {
       
       
       # 5) collect results
-      incProgress(0.1, detail = "Collecting results…")
-      prob_cols_df <- setdiff(names(pred_df), c("max_prob", "pred_class"))
-      class_pred   <- as.character(pred_df$pred_class[1])
-      probs        <- as.list(pred_df[1, prob_cols_df, drop = FALSE])
+      incProgress(0.9, detail = "Collecting results…")
+      
+      # pred_df should be 1 row for the selected sample
+      stopifnot(nrow(pred_df) >= 1)
+      
+      # Use calibrated predictions
+      class_pred <- as.character(pred_df$cal_pred[1])
+      
+      # Extract calibrated probabilities only
+      cal_prob_cols <- paste0("cal_", prob_cols)
+      
+      # named numeric vector (or list) of class probabilities
+      probs <- as.list(stats::setNames(
+        as.numeric(pred_df[1, cal_prob_cols]),
+        prob_cols
+      ))
       
       results <- tibble(
         Sample     = sample_name,
-        Prediction = class_pred
+        Prediction = class_pred,
+        MaxProb    = as.numeric(pred_df$cal_max_prob[1])
       ) %>%
         bind_cols(as_tibble(probs))
       
       # 6) finish up
-      incProgress(0.05, detail = "Done.")
+      incProgress(1, detail = "Done.")
+      
       list(
         prediction    = class_pred,
+        max_prob      = as.numeric(pred_df$cal_max_prob[1]),
         probabilities = probs,
         results       = results,
         test_sample   = baked
       )
+      
     })
   })
   
@@ -737,80 +753,52 @@ server <- function(input, output, session) {
     req(res)
     
     sample_name     <- res$results$Sample
-    predicted_class <- res$prediction    
+    predicted_class <- res$prediction
     
-    # Decide what to show for class & score
-    display_class <- if (predicted_class == "reject") {
-      "Not Classifiable"
-    } else {
-      predicted_class
-    }
+    display_class <- if (predicted_class == REJECT_LABEL) "Not Classifiable" else predicted_class
     
-    display_score <- if (predicted_class == "reject") {
-      "No score above cut-off"
+    display_score <- if (predicted_class == REJECT_LABEL) {
+      paste0("No score above cut-off (max=", round(res$max_prob, 3), ")")
     } else {
-      # safe convert & round
       round(as.numeric(res$probabilities[[predicted_class]]), 3)
     }
     
     paste0(
-      "Sample ID: ",           sample_name,   "\n",
-      "Prediction: ",       display_class, "\n",
-      "Prediction Score: ", display_score
+      "Sample ID: ",         sample_name,   "\n",
+      "Prediction: ",        display_class, "\n",
+      "Prediction Score: ",  display_score
     )
   })
+  
   
   
   output$probability_chart <- renderPlot({
     res <- classification()
     req(res)
     
-    # turn the named list into a data frame
-    prob_df <- as.data.frame(res$probabilities, stringsAsFactors = FALSE) %>%
-      pivot_longer(
-        cols      = everything(),
-        names_to  = "Class",
-        values_to = "Probability"
-      ) %>%
+    prob_df <- tibble(
+      Class = names(res$probabilities),
+      Probability = as.numeric(unlist(res$probabilities))
+    ) %>%
       arrange(desc(Probability))
     
-    max_class <- prob_df$Class[1]  # highest-probability class
+    max_class <- prob_df$Class[1]
     
-    ggplot(prob_df, aes(
-      x    = reorder(Class, Probability),
-      y    = Probability,
-      fill = Class == max_class
-    )) +
+    ggplot(prob_df, aes(x = reorder(Class, Probability), y = Probability, fill = Class == max_class)) +
       geom_col(width = 0.6) +
-      # cutoff line at 0.6
-      geom_hline(
-        yintercept = 0.5,
-        linetype   = "dashed",
-        color      = "#6c757d",
-        size       = 0.8
-      ) +
+      geom_hline(yintercept = 0.5, linetype = "dashed", color = "#6c757d", linewidth = 0.8) +
       coord_flip() +
-      scale_fill_manual(
-        values = c("FALSE" = "#6c757d", "TRUE" = "#0072B2"),
-        guide  = "none"
-      ) +
-      labs(
-        title = "Class Probabilities",
-        x     = "Class",
-        y     = "Probability"
-      ) +
-      scale_y_continuous(
-        limits = c(0, 1),                
-        breaks = seq(0, 1, by = 0.1),    
-        expand = c(0, 0)                 
-      ) +
+      scale_fill_manual(values = c("FALSE" = "#6c757d", "TRUE" = "#0072B2"), guide = "none") +
+      labs(title = "Calibrated class probabilities", x = "Class", y = "Probability") +
+      scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.1), expand = c(0, 0)) +
       theme_minimal(base_size = 14) +
       theme(
-        plot.title     = element_text(hjust = 0.5, face = "bold"),
-        axis.text.y    = element_text(face = "bold", size = 12),
-        axis.text.x    = element_text(size = 12)
+        plot.title  = element_text(hjust = 0.5, face = "bold"),
+        axis.text.y = element_text(face = "bold", size = 12),
+        axis.text.x = element_text(size = 12)
       )
   })
+  
   
   observeEvent(input$reset, {
     session$reload()
@@ -1331,6 +1319,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
+
 
 
 
