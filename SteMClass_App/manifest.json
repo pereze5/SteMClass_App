@@ -6351,6 +6351,29 @@
         "Archs": "x64"
       }
     },
+    "slam": {
+      "Source": "CRAN",
+      "Repository": "https://cran.rstudio.com",
+      "description": {
+        "Package": "slam",
+        "Version": "0.1-55",
+        "Title": "Sparse Lightweight Arrays and Matrices",
+        "Authors@R": "c(person(\"Kurt\", \"Hornik\", role = c(\"aut\", \"cre\"),\n                     email = \"Kurt.Hornik@R-project.org\",\n\t\t     comment = c(ORCID = \"0000-0003-4198-9911\")),\n             person(\"David\", \"Meyer\", role = \"aut\",\n\t             email = \"David.Meyer@R-project.org\",\n\t\t     comment = c(ORCID = \"0000-0002-5196-3048\")),\n             person(\"Christian\", \"Buchta\", role = \"aut\"))",
+        "Description": "Data structures and algorithms for sparse arrays and matrices,\n  based on index arrays and simple triplet representations, respectively.",
+        "Depends": "R (>= 3.4.0)",
+        "Imports": "stats",
+        "Enhances": "Matrix, SparseM, spam",
+        "License": "GPL-2",
+        "NeedsCompilation": "yes",
+        "Packaged": "2024-11-12 16:45:23 UTC; hornik",
+        "Author": "Kurt Hornik [aut, cre] (<https://orcid.org/0000-0003-4198-9911>),\n  David Meyer [aut] (<https://orcid.org/0000-0002-5196-3048>),\n  Christian Buchta [aut]",
+        "Maintainer": "Kurt Hornik <Kurt.Hornik@R-project.org>",
+        "Repository": "CRAN",
+        "Date/Publication": "2024-11-13 07:13:31 UTC",
+        "Built": "R 4.5.2; x86_64-w64-mingw32; 2025-11-01 00:31:23 UTC; windows",
+        "Archs": "x64"
+      }
+    },
     "slider": {
       "Source": "CRAN",
       "Repository": "https://cran.rstudio.com",
@@ -6665,6 +6688,34 @@
         "Repository": "CRAN",
         "Date/Publication": "2025-08-25 07:50:03 UTC",
         "Built": "R 4.5.2; ; 2026-01-23 03:57:37 UTC; windows"
+      }
+    },
+    "textshape": {
+      "Source": "CRAN",
+      "Repository": "https://cran.rstudio.com",
+      "description": {
+        "Package": "textshape",
+        "Title": "Tools for Reshaping Text",
+        "Version": "1.7.5",
+        "Authors@R": "c(\n        person(\"Tyler\", \"Rinker\", email = \"tyler.rinker@gmail.com\", role = c(\"aut\", \"cre\")), \n        person(\"Joran\", \"Elias\", role = \"ctb\"), \n        person(\"Matthew\", \"Flickinger\", role = \"ctb\"), \n        person('Paul', 'Foster', role = \"ctb\")\n    )",
+        "Maintainer": "Tyler Rinker <tyler.rinker@gmail.com>",
+        "Description": "Tools that can be used to reshape and restructure text data.",
+        "Depends": "R (>= 3.4.0)",
+        "Imports": "data.table, slam, stats, stringi, utils",
+        "Suggests": "testthat",
+        "License": "GPL-2",
+        "LazyData": "TRUE",
+        "RoxygenNote": "7.2.3",
+        "Encoding": "UTF-8",
+        "URL": "https://github.com/trinker/textshape",
+        "BugReports": "https://github.com/trinker/textshape/issues",
+        "Collate": "'bind_list.R' 'bind_table.R' 'bind_vector.R' 'change_index.R'\n'cluster_matrix.R' 'column_to_rownames.R' 'combine.R'\n'duration.R' 'flatten.R' 'from_to.R' 'grab_index.R'\n'grab_match.R' 'mtabulate.R' 'split_index.R' 'split_match.R'\n'split_match_regex_to_transcript.R' 'split_portion.R'\n'split_run.R' 'split_sentence.R' 'split_sentence_token.R'\n'split_speaker.R' 'split_token.R' 'split_transcript.R'\n'split_word.R' 'textshape-package.R' 'tidy_colo_dtm.R'\n'utils.R' 'tidy_dtm.R' 'tidy_list.R' 'tidy_matrix.R'\n'tidy_table.R' 'tidy_vector.R' 'unique_pairs.R' 'unnest_text.R'",
+        "NeedsCompilation": "no",
+        "Packaged": "2024-04-01 16:57:59 UTC; tylerrinker",
+        "Author": "Tyler Rinker [aut, cre],\n  Joran Elias [ctb],\n  Matthew Flickinger [ctb],\n  Paul Foster [ctb]",
+        "Repository": "CRAN",
+        "Date/Publication": "2024-04-01 23:20:03 UTC",
+        "Built": "R 4.5.2; ; 2026-01-23 01:53:40 UTC; windows"
       }
     },
     "thematic": {
@@ -7437,7 +7488,7 @@
       "checksum": "6672af790ea446940ac5c30aafe613ba"
     },
     "app.R": {
-      "checksum": "92925fd3c0660c938b1a7fa017eccea0"
+      "checksum": "957fb6fc518f51c84c7643b962ab1581"
     },
     "Mset1_EPICv2_sample_combinearrays.rds": {
       "checksum": "8a29c64f006139f4fe3b8830641f8473"
@@ -7451,4 +7502,3 @@
   },
   "users": null
 }
-
