@@ -32,6 +32,8 @@ heatmap_scale_blues <- colorRamp2(
   blues_pal
 )
 
+REJECT_LABEL <- "reject"
+
 apply_calibrator <- function(cal_obj, raw_prob_df, class_names) {
   # raw_prob_df must have columns == class_names in that order
   stopifnot(all(class_names %in% colnames(raw_prob_df)))
@@ -1329,6 +1331,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
+
 
 
 
