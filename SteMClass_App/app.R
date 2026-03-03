@@ -21,7 +21,8 @@ urls <- list(
   cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
   train_data = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_data.txt",
   cal_model = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/calibration_model_deploy.rds",
-  prepped_rec = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/prepped_recipe.rds"
+  prepped_rec = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/prepped_recipe.rds",
+  train_gmset = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/gmset_train_2025_flt.rda"
 )
 
 # 9‐color Blues palette; interpolate to 255
@@ -566,6 +567,14 @@ server <- function(input, output, session) {
   
   
   # Reactive expression to wrap the train_data
+  ref_beta <- reactive({
+    con <- url(urls$train_gmset, "rb")
+    load(con)
+    bVals_train <- getBeta(gmset_train)
+    bVals_train
+  })
+  
+  
   training_data <- reactive({
     # with rownames = sample IDs and a column "Class"
     train_data <- data.table::fread(urls$train_data)
@@ -589,6 +598,8 @@ server <- function(input, output, session) {
     marker_data
   })
   
+  
+
   # Reactive expression to wrap the CpG anno
   ann450K <- reactive({
     ann450K <- data.table::fread(urls$cpg_anno)
@@ -601,23 +612,6 @@ server <- function(input, output, session) {
     sample_anno <- data.table::fread(urls$train_anno)
     sample_anno$Class <- as.factor(sample_anno$Class_rf)
     sample_anno
-  })
-  
-  # Reactive expression to wrap the reference beta matrix
-  ref_beta <- reactive({
-    td <- training_data()
-    sa <- sample_anno()
-    
-    # Drop the class column, keep only CpGs
-    beta_mat <- td[, !c("Class"), with = FALSE]
-    
-    # Transpose so rows = CpGs, cols = samples
-    beta_mat <- t(as.matrix(beta_mat))
-    
-    # Set column names from sample annotation
-    colnames(beta_mat) <- sa$Sample_accession
-    
-    beta_mat
   })
   
   # Reactive expression to wrap the marker beta matrix
@@ -636,6 +630,7 @@ server <- function(input, output, session) {
     
     beta_mat
   })
+
   
   classification <- eventReactive(input$classify, {
     req(beta_data(), training_data(), sample_anno())
@@ -1006,10 +1001,10 @@ server <- function(input, output, session) {
   
   # Build a Heatmap object when the user clicks “Plot Heatmap”
   gene_heatmap_obj <- eventReactive(input$plot_button, {
-    req(beta_data(), input$gene_input, input$celltype, ann450K(), marker_beta(), sample_anno())
+    req(beta_data(), input$gene_input, input$celltype, ann450K(), ref_beta(), sample_anno())
     
     withProgress(message = "Generating gene‐level heatmap", value = 0, {
-      marker_beta <- marker_beta()
+      marker_beta <- ref_beta()
       ann450K <- ann450K()
       marker      <- input$marker
       sample_name <- input$sample_accession
