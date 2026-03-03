@@ -1,4 +1,5 @@
 
+
 options(shiny.maxRequestSize = 30*1024^2)
 
 library(shinyjs)
@@ -19,7 +20,8 @@ urls <- list(
   marker_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_marker_data.txt",
   cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
   train_data = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_data.txt",
-  cal_model = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/calibration_model_deploy.rds"
+  cal_model = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/calibration_model_deploy.rds",
+  prepped_rec = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/prepped_recipe.rds"
 )
 
 # 9‐color Blues palette; interpolate to 255
@@ -34,6 +36,15 @@ heatmap_scale_blues <- colorRamp2(
 
 REJECT_LABEL <- "reject"
 
+# ---- helper: stable softmax (in case calibrator returns logits)
+softmax_mat <- function(eta) {
+  eta <- as.matrix(eta)
+  eta <- eta - apply(eta, 1, max)            # stability
+  exp_eta <- exp(eta)
+  exp_eta / rowSums(exp_eta)
+}
+
+# ---- helper: apply calibrator (glmnet OR tidymodels workflow) ----
 apply_calibrator <- function(cal_obj, raw_prob_df, class_names) {
   # raw_prob_df must have columns == class_names in that order
   stopifnot(all(class_names %in% colnames(raw_prob_df)))
@@ -75,6 +86,96 @@ apply_calibrator <- function(cal_obj, raw_prob_df, class_names) {
   stop("Unsupported calibration object type: ", paste(class(cal_obj), collapse = ", "))
 }
 
+predict_calibrated_all <- function(
+    beta_mat_cpg_by_sample,
+    train_data,
+    prepped_rec,
+    rf_fit_path,
+    cal_path,
+    class_names = c("Astrocyte","Ectoderm","Endoderm","Endothelial","iPSC","Lung","Mesoderm","NSC"),
+    threshold = 0.5,
+    apply_reject = TRUE
+) {
+  if (!requireNamespace("workflows", quietly = TRUE)) stop("Package 'workflows' is required.")
+  if (!requireNamespace("parsnip", quietly = TRUE))   stop("Package 'parsnip' is required.")
+  
+  # 1) Expected CpGs from training
+  # After prep(rec) exists:
+  expected_cpgs <- recipes::juice(prepped_rec, all_predictors()) %>% colnames()
+  
+  # 2) Convert to samples x CpGs and align/insert NA for missing CpGs
+  X <- t(beta_mat_cpg_by_sample) %>% as.data.frame()  # samples x CpGs
+  missing_cpgs <- setdiff(expected_cpgs, colnames(X))
+  if (length(missing_cpgs) > 0) {
+    X[, missing_cpgs] <- NA_real_
+  }
+  X <- X[, expected_cpgs, drop = FALSE]
+  
+  # 3) Prepare new_data for bake: predictors only, numeric, aligned
+  X_tbl <- X %>%
+    tibble::rownames_to_column("Sample_accession") %>%
+    tibble::as_tibble()
+  
+  # Force all CpG predictors to numeric (protects step_impute_median)
+  # This will turn "NA", "", etc. into NA_real_ cleanly
+  X_tbl[expected_cpgs] <- lapply(X_tbl[expected_cpgs], function(z) as.numeric(z))
+  
+  X_tbl <- X_tbl %>% tibble::column_to_rownames("Sample_accession")
+  
+  # Bake (no outcome column required)
+  baked <- recipes::bake(prepped_rec, new_data = X_tbl)
+  
+  
+  # 4) Load models
+  rf_fit_path  = url(urls$model)
+  cal_path     = url(urls$cal_model)
+  
+  rf_bundle  <- readRDS(rf_fit_path)
+  cal_deploy <- tryCatch(
+    readRDS(cal_path),
+    error = function(e) stop("Failed to load calibration model: ", e$message)
+  )
+  
+  rf_fit <- if (is.list(rf_bundle) && "model_fit" %in% names(rf_bundle)) rf_bundle$model_fit else rf_bundle
+  
+  # 5) RF raw probs (workflow-safe)
+  raw_probs <- predict(rf_fit, new_data = baked, type = "prob") %>% tibble::as_tibble()
+  colnames(raw_probs) <- gsub("^\\.pred_", "", colnames(raw_probs))
+  
+  missing <- setdiff(class_names, colnames(raw_probs))
+  if (length(missing) > 0) stop("RF probability output missing classes: ", paste(missing, collapse = ", "))
+  raw_probs <- raw_probs[, class_names, drop = FALSE]
+  
+  # 6) Calibrated probs
+  cal_obj <- cal_deploy
+  if (is.list(cal_obj) && "cv" %in% names(cal_obj)) cal_obj <- cal_obj$cv
+  cal_probs <- apply_calibrator(cal_obj, raw_probs, class_names)
+  
+  # 7) Assemble output (one row per sample)
+  # After apply_calibrator(), force bare class names
+  colnames(cal_probs) <- class_names
+  
+  out <- dplyr::bind_cols(
+    tibble::tibble(Sample_accession = rownames(baked)),
+    raw_probs %>% dplyr::rename_with(~ paste0("raw_", .x)),
+    cal_probs %>% dplyr::rename_with(~ paste0("cal_", .x))
+  )
+  
+  if (apply_reject) {
+    cal_mat <- as.matrix(cal_probs)
+    max_prob <- apply(cal_mat, 1, max)
+    argmax   <- class_names[max.col(cal_mat, ties.method = "first")]
+    pred_class <- ifelse(max_prob < threshold, REJECT_LABEL, argmax)
+    
+    out <- dplyr::mutate(
+      out,
+      cal_max_prob = max_prob,
+      cal_pred = factor(pred_class, levels = c(class_names, REJECT_LABEL))
+    )
+  }
+  
+  out
+}
 # Activate thematic for ggplot2 styling based on bs_theme
 thematic::thematic_shiny()
 
@@ -546,8 +647,6 @@ server <- function(input, output, session) {
       # Read training data directly into memory 
       train_data <- training_data()
       
-      # Load model directly from URL
-      rf_fit <- readRDS(url(urls$model))
       
       # Load reference beta matrix (row = CpGs, col = samples)
       ref_beta <- ref_beta()
@@ -588,105 +687,19 @@ server <- function(input, output, session) {
       
       # 4) predict
       incProgress(0.4, detail = "Predicting…")
-      apply_calibrator <- function(cal_obj, raw_prob_df, class_names) {
-        # raw_prob_df must have columns == class_names in that order
-        stopifnot(all(class_names %in% colnames(raw_prob_df)))
-        
-        X <- as.matrix(raw_prob_df[, class_names, drop = FALSE])
-        
-        # Case A: tidymodels workflow (or parsnip fit) that supports predict(type="prob")
-        if (inherits(cal_obj, "workflow")) {
-          # workflow predict() usually returns tibble of class probs
-          p <- predict(cal_obj, new_data = as.data.frame(X), type = "prob")
-          # Ensure column names are exactly class_names
-          colnames(p) <- gsub("^\\.pred_", "", colnames(p))
-          p <- p[, class_names, drop = FALSE]
-          return(as_tibble(p))
-        }
-        
-        # Case B: glmnet model (cv.glmnet or glmnet)
-        if (inherits(cal_obj, "cv.glmnet") || inherits(cal_obj, "glmnet")) {
-          # Use lambda.1se if available (per your description); else lambda.min; else s not needed
-          s_val <- NULL
-          if (!is.null(cal_obj$lambda.1se)) s_val <- "lambda.1se"
-          if (is.null(s_val) && !is.null(cal_obj$lambda.min)) s_val <- "lambda.min"
-          
-          # Prefer type="response" for multinomial, which returns probabilities
-          p_arr <- if (!is.null(s_val)) {
-            predict(cal_obj, newx = X, s = s_val, type = "response")
-          } else {
-            predict(cal_obj, newx = X, type = "response")
-          }
-          
-          # glmnet multinomial predict(type="response") returns an array: n x K x 1
-          if (length(dim(p_arr)) == 3) p_mat <- p_arr[, , 1, drop = FALSE] else p_mat <- p_arr
-          
-          # Set class names (glmnet often carries dimnames; but enforce)
-          colnames(p_mat) <- class_names
-          return(as_tibble(p_mat))
-        }
-        
-        stop("Unsupported calibration object type: ", paste(class(cal_obj), collapse = ", "))
-      }
       
-      predict_calibrated <- function(
-    new_data,
-    rf_fit_path  = url(urls$model),
-    cal_path     = url(urls$cal_model),
-    class_names  = c("Astrocyte","Ectoderm","Endoderm","Endothelial","iPSC","Lung","Mesoderm","NSC"),
-    threshold    = 0.5,         
-    apply_reject = TRUE
-      ) {
-        # 1) Load model bundle + calibrator
-        rf_bundle <- readRDS(rf_fit_path)
-        cal_deploy <- readRDS(cal_path)
-        
-        # in case need to use bundled clas and prob rds:
-        rf_fit <- if (is.list(rf_bundle) && "model_fit" %in% names(rf_bundle)) rf_bundle$model_fit else rf_bundle
-        
-        # 2) RF raw probabilities
-        raw_probs <- predict(rf_fit, new_data = new_data, type = "prob") %>% as_tibble()
-        colnames(raw_probs) <- gsub("^\\.pred_", "", colnames(raw_probs))
-        
-        # Ensure class order and presence
-        missing <- setdiff(class_names, colnames(raw_probs))
-        if (length(missing) > 0) stop("RF probability output missing classes: ", paste(missing, collapse = ", "))
-        raw_probs <- raw_probs[, class_names, drop = FALSE]
-        
-        # 3) Apply calibration model to raw probs
-        cal_obj <- cal_deploy
-        if (is.list(cal_obj) && "cv" %in% names(cal_obj)) cal_obj <- cal_obj$cv
-        cal_probs <- apply_calibrator(cal_obj, raw_probs, class_names)
-        
-        
-        # 4) rejection + predicted class using calibrated probs
-        if (apply_reject) {
-          max_prob <- do.call(pmax, cal_probs)
-          argmax <- class_names[max.col(as.matrix(cal_probs), ties.method = "first")]
-          pred_class <- ifelse(max_prob < threshold, REJECT_LABEL, argmax)
-          
-          out <- bind_cols(
-            raw_probs %>% rename_with(~ paste0("raw_", .x)),
-            cal_probs %>% rename_with(~ paste0("cal_", .x)),
-            tibble(
-              cal_max_prob = max_prob,
-              cal_pred     = factor(pred_class, levels = c(class_names, REJECT_LABEL))
-            )
-          )
-        } else {
-          out <- bind_cols(
-            raw_probs %>% rename_with(~ paste0("raw_", .x)),
-            cal_probs %>% rename_with(~ paste0("cal_", .x))
-          )
-        }
-        
-        out
-      }
-      pred_df <- predict_calibrated(
-        new_data    = baked,      # must match RF workflow feature columns / recipe
-        threshold   = 0.5,
+      beta_mat_cpg_by_sample <- t(as.matrix(test_sample))
+      
+      pred_df <- predict_calibrated_all(
+        beta_mat_cpg_by_sample = beta_mat_cpg_by_sample,
+        train_data   = train_data,
+        prepped_rec  = prepped_rec,
+        rf_fit_path  = url(urls$model),
+        cal_path     = url(urls$cal_model),
+        threshold    = 0.5,
         apply_reject = TRUE
       )
+      
       
       
       # 5) collect results
@@ -699,7 +712,11 @@ server <- function(input, output, session) {
       class_pred <- as.character(pred_df$cal_pred[1])
       
       # Extract calibrated probabilities only
-      cal_prob_cols <- paste0("cal_", prob_cols)
+      # Instead of constructing names manually, detect them directly
+      cal_prob_cols <- grep("^cal_", colnames(pred_df), value = TRUE)
+      cal_prob_cols <- cal_prob_cols[!cal_prob_cols %in% c("cal_max_prob", "cal_pred")]
+      
+      message("pred_df columns: ", paste(colnames(pred_df), collapse = ", "))
       
       # named numeric vector (or list) of class probabilities
       probs <- as.list(stats::setNames(
@@ -989,10 +1006,15 @@ server <- function(input, output, session) {
   
   # Build a Heatmap object when the user clicks “Plot Heatmap”
   gene_heatmap_obj <- eventReactive(input$plot_button, {
-    req(beta_data(), input$gene_input, input$celltype, ann450K(), marker_data(), sample_anno())
+    req(beta_data(), input$gene_input, input$celltype, ann450K(), marker_beta(), sample_anno())
     
     withProgress(message = "Generating gene‐level heatmap", value = 0, {
-      marker_data <- marker_data()
+      marker_beta <- marker_beta()
+      ann450K <- ann450K()
+      marker      <- input$marker
+      sample_name <- input$sample_accession
+      
+     
       # look up probes for this gene
       incProgress(0.1, detail = "Finding CpGs for gene…")
       celltype    <- input$celltype
@@ -1013,14 +1035,15 @@ server <- function(input, output, session) {
       
       # filter bvals
       incProgress(0.3, detail = "Filtering beta values")
-      # Filter to CpGs of interest in marker_data
+      # Filter to CpGs of interest in marker_beta
       
-      common_cpgs <- intersect(cpg_ids, intersect(rownames(marker_data), colnames(beta_data())))
+      # Filter to CpGs of interest in marker_beta
+      common_cpgs <- intersect(cpg_ids, intersect(rownames(marker_beta), colnames(beta_data())))
       if (length(common_cpgs) == 0) {
         showNotification("No shared CpGs found between reference and sample for this gene.", type = "error")
         return(NULL)
       }
-      beta_values_ref <- marker_data[common_cpgs, , drop = FALSE]
+      beta_values_ref <- marker_beta[common_cpgs, , drop = FALSE]
       test_vec        <- beta_data()[, common_cpgs, drop = FALSE]
       test_mat        <- t(test_vec)
       rownames(test_mat) <- common_cpgs
@@ -1319,7 +1342,6 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
-
 
 
 
