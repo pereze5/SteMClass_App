@@ -256,29 +256,27 @@
         "biocViews": "SequenceMatching, Alignment, Sequencing, Genetics,\nDataImport, DataRepresentation, Infrastructure",
         "URL": "https://bioconductor.org/packages/Biostrings",
         "BugReports": "https://github.com/Bioconductor/Biostrings/issues",
-        "Version": "2.70.3",
+        "Version": "2.74.1",
         "License": "Artistic-2.0",
         "Encoding": "UTF-8",
-        "Authors@R": "c(\n\tperson(\"Hervé\", \"Pagès\", role=c(\"aut\", \"cre\"),\n\t\temail=\"hpages.on.github@gmail.com\"),\n\tperson(\"Patrick\", \"Aboyoun\", role=\"aut\"),\n\tperson(\"Robert\", \"Gentleman\", role=\"aut\"),\n\tperson(\"Saikat\", \"DebRoy\", role=\"aut\"),\n\tperson(\"Vince\", \"Carey\", role=\"ctb\"),\n\tperson(\"Nicolas\", \"Delhomme\", role=\"ctb\"),\n\tperson(\"Felix\", \"Ernst\", role=\"ctb\"),\n\tperson(\"Haleema\", \"Khan\", role=\"ctb\",\n\t       comment=\"Converted 'matchprobes' vignette from Sweave to RMarkdown\"),\n\tperson(\"Aidan\", \"Lakshman\", role=\"ctb\"),\n\tperson(\"Kieran\", \"O'Neill\", role=\"ctb\"),\n\tperson(\"Valerie\", \"Obenchain\", role=\"ctb\"),\n\tperson(\"Marcel\", \"Ramos\", role=\"ctb\"),\n\tperson(\"Albert\", \"Vill\", role=\"ctb\"),\n\tperson(\"Jen\", \"Wokaty\", role=\"ctb\",\n\t       comment=\"Converted 'matchprobes' vignette from Sweave to RMarkdown\"),\n\tperson(\"Erik\", \"Wright\", role=\"ctb\"))",
-        "Depends": "R (>= 4.0.0), methods, BiocGenerics (>= 0.37.0), S4Vectors (>=\n0.27.12), IRanges (>= 2.31.2), XVector (>= 0.37.1),\nGenomeInfoDb",
-        "Imports": "methods, utils, grDevices, graphics, stats, crayon",
+        "Authors@R": "c(\n\tperson(\"Hervé\", \"Pagès\", role=c(\"aut\", \"cre\"),\n\t\temail=\"hpages.on.github@gmail.com\"),\n\tperson(\"Patrick\", \"Aboyoun\", role=\"aut\"),\n\tperson(\"Robert\", \"Gentleman\", role=\"aut\"),\n\tperson(\"Saikat\", \"DebRoy\", role=\"aut\"),\n\tperson(\"Vince\", \"Carey\", role=\"ctb\"),\n\tperson(\"Nicolas\", \"Delhomme\", role=\"ctb\"),\n\tperson(\"Felix\", \"Ernst\", role=\"ctb\"),\n\tperson(\"Wolfgang\", \"Huber\", role=\"ctb\",\n\t       comment=\"'matchprobes' vignette\"),\n\tperson(\"Beryl\", \"Kanali\", role=\"ctb\",\n\t       comment=\"Converted 'MultipleAlignments' vignette from Sweave to RMarkdown\"),\n\tperson(\"Haleema\", \"Khan\", role=\"ctb\",\n\t       comment=\"Converted 'matchprobes' vignette from Sweave to RMarkdown\"),\n\tperson(\"Aidan\", \"Lakshman\", role=\"ctb\"),\n\tperson(\"Kieran\", \"O'Neill\", role=\"ctb\"),\n\tperson(\"Valerie\", \"Obenchain\", role=\"ctb\"),\n\tperson(\"Marcel\", \"Ramos\", role=\"ctb\"),\n\tperson(\"Albert\", \"Vill\", role=\"ctb\"),\n\tperson(\"Jen\", \"Wokaty\", role=\"ctb\",\n\t       comment=\"Converted 'matchprobes' vignette from Sweave to RMarkdown\"),\n\tperson(\"Erik\", \"Wright\", role=\"ctb\"))",
+        "Depends": "R (>= 4.0.0), BiocGenerics (>= 0.37.0), S4Vectors (>=\n0.27.12), IRanges (>= 2.31.2), XVector (>= 0.37.1),\nGenomeInfoDb",
+        "Imports": "methods, utils, grDevices, stats, crayon",
         "LinkingTo": "S4Vectors, IRanges, XVector",
-        "Enhances": "Rmpi",
-        "Suggests": "BSgenome (>= 1.13.14), BSgenome.Celegans.UCSC.ce2 (>=\n1.3.11), BSgenome.Dmelanogaster.UCSC.dm3 (>= 1.3.11),\nBSgenome.Hsapiens.UCSC.hg18, drosophila2probe, hgu95av2probe,\nhgu133aprobe, GenomicFeatures (>= 1.3.14), hgu95av2cdf, affy\n(>= 1.41.3), affydata (>= 1.11.5), RUnit, BiocStyle, knitr",
+        "Suggests": "graphics, pwalign, BSgenome (>= 1.13.14),\nBSgenome.Celegans.UCSC.ce2 (>= 1.3.11),\nBSgenome.Dmelanogaster.UCSC.dm3 (>= 1.3.11),\nBSgenome.Hsapiens.UCSC.hg18, drosophila2probe, hgu95av2probe,\nhgu133aprobe, GenomicFeatures (>= 1.3.14), hgu95av2cdf, affy\n(>= 1.41.3), affydata (>= 1.11.5), RUnit, BiocStyle, knitr,\ntestthat (>= 3.0.0), covr",
         "VignetteBuilder": "knitr",
-        "LazyLoad": "yes",
-        "Collate": "00datacache.R utils.R IUPAC_CODE_MAP.R AMINO_ACID_CODE.R\nGENETIC_CODE.R XStringCodec-class.R seqtype.R coloring.R\nXString-class.R XStringSet-class.R XStringSet-comparison.R\nXStringViews-class.R MaskedXString-class.R\nXStringSetList-class.R seqinfo-methods.R xscat.R\nXStringSet-io.R letter.R getSeq.R letterFrequency.R\ndinucleotideFrequencyTest.R chartr.R reverseComplement.R\ntranslate.R toComplex.R replaceAt.R replaceLetterAt.R\ninjectHardMask.R padAndClip.R strsplit-methods.R misc.R\nSparseList-class.R MIndex-class.R lowlevel-matching.R\nmatch-utils.R matchPattern.R maskMotif.R matchLRPatterns.R\ntrimLRPatterns.R matchProbePair.R matchPWM.R findPalindromes.R\nPDict-class.R matchPDict.R XStringPartialMatches-class.R\nXStringQuality-class.R QualityScaledXStringSet.R InDel-class.R\nAlignedXStringSet-class.R PairwiseAlignments-class.R\nPairwiseAlignmentsSingleSubject-class.R PairwiseAlignments-io.R\nalign-utils.R pmatchPattern.R pairwiseAlignment.R stringDist.R\nneedwunsQS.R MultipleAlignment.R matchprobes.R zzz.R",
+        "Collate": "utils.R IUPAC_CODE_MAP.R AMINO_ACID_CODE.R GENETIC_CODE.R\nXStringCodec-class.R seqtype.R coloring.R XString-class.R\nXStringSet-class.R XStringSet-comparison.R XStringViews-class.R\nMaskedXString-class.R XStringSetList-class.R seqinfo-methods.R\nxscat.R XStringSet-io.R letter.R getSeq.R letterFrequency.R\ndinucleotideFrequencyTest.R chartr.R reverseComplement.R\ntranslate.R toComplex.R replaceAt.R replaceLetterAt.R\ninjectHardMask.R padAndClip.R strsplit-methods.R misc.R\nSparseList-class.R MIndex-class.R lowlevel-matching.R\nmatch-utils.R matchPattern.R maskMotif.R matchLRPatterns.R\ntrimLRPatterns.R matchProbePair.R matchPWM.R findPalindromes.R\nPDict-class.R matchPDict.R XStringPartialMatches-class.R\nXStringQuality-class.R QualityScaledXStringSet.R\npmatchPattern.R needwunsQS.R MultipleAlignment.R matchprobes.R\nmoved_to_pwalign.R zzz.R",
         "git_url": "https://git.bioconductor.org/packages/Biostrings",
-        "git_branch": "RELEASE_3_18",
-        "git_last_commit": "c213e35",
-        "git_last_commit_date": "2024-03-12",
-        "Repository": "Bioconductor 3.18",
-        "Date/Publication": "2024-03-13",
+        "git_branch": "RELEASE_3_20",
+        "git_last_commit": "b5de574",
+        "git_last_commit_date": "2024-12-14",
+        "Repository": "Bioconductor 3.20",
+        "Date/Publication": "2024-12-16",
         "NeedsCompilation": "yes",
-        "Packaged": "2024-03-13 21:56:55 UTC; biocbuild",
-        "Author": "Hervé Pagès [aut, cre],\n  Patrick Aboyoun [aut],\n  Robert Gentleman [aut],\n  Saikat DebRoy [aut],\n  Vince Carey [ctb],\n  Nicolas Delhomme [ctb],\n  Felix Ernst [ctb],\n  Haleema Khan [ctb] (Converted 'matchprobes' vignette from Sweave to\n    RMarkdown),\n  Aidan Lakshman [ctb],\n  Kieran O'Neill [ctb],\n  Valerie Obenchain [ctb],\n  Marcel Ramos [ctb],\n  Albert Vill [ctb],\n  Jen Wokaty [ctb] (Converted 'matchprobes' vignette from Sweave to\n    RMarkdown),\n  Erik Wright [ctb]",
+        "Packaged": "2024-12-16 22:33:52 UTC; biocbuild",
+        "Author": "Hervé Pagès [aut, cre],\n  Patrick Aboyoun [aut],\n  Robert Gentleman [aut],\n  Saikat DebRoy [aut],\n  Vince Carey [ctb],\n  Nicolas Delhomme [ctb],\n  Felix Ernst [ctb],\n  Wolfgang Huber [ctb] ('matchprobes' vignette),\n  Beryl Kanali [ctb] (Converted 'MultipleAlignments' vignette from Sweave\n    to RMarkdown),\n  Haleema Khan [ctb] (Converted 'matchprobes' vignette from Sweave to\n    RMarkdown),\n  Aidan Lakshman [ctb],\n  Kieran O'Neill [ctb],\n  Valerie Obenchain [ctb],\n  Marcel Ramos [ctb],\n  Albert Vill [ctb],\n  Jen Wokaty [ctb] (Converted 'matchprobes' vignette from Sweave to\n    RMarkdown),\n  Erik Wright [ctb]",
         "Maintainer": "Hervé Pagès <hpages.on.github@gmail.com>",
-        "Built": "R 4.3.3; x86_64-w64-mingw32; 2024-03-14 11:15:02 UTC; windows",
+        "Built": "R 4.4.2; x86_64-w64-mingw32; 2024-12-17 12:33:21 UTC; windows",
         "Archs": "x64"
       }
     },
@@ -7398,7 +7396,7 @@
       "checksum": "8a29c64f006139f4fe3b8830641f8473"
     },
     "renv.lock": {
-      "checksum": "421757d7182706fc428918806b4d3c28"
+      "checksum": "30453a512229af8ecece953666dc8c08"
     },
     "report.css": {
       "checksum": "0ca0837c30c7e6bb2dbcc46b0a3cf032"
