@@ -1,5 +1,6 @@
 
 
+
 options(shiny.maxRequestSize = 30*1024^2)
 
 library(shinyjs)
@@ -36,6 +37,78 @@ heatmap_scale_blues <- colorRamp2(
 )
 
 REJECT_LABEL <- "reject"
+
+
+
+example_samples <- list(
+  list(
+    label         = "iPSC Test Sample (GSM9238338)",
+    accession     = "GSM9238338 iPSC",
+    array_version = "EPICv1",
+    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206687210042_R03C01_Grn.idat",
+    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206687210042_R03C01_Red.idat"
+  ),
+  list(
+    label         = "Ectoderm Test Sample (GSM9238401)",
+    accession     = "GSM9238401 Ectoderm",
+    array_version = "EPICv1",
+    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/204964480134_R08C01_Grn.idat",
+    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/204964480134_R08C01_Red.idat"
+  ),
+  list(
+    label         = "Endoderm Test Sample (GSM9238413)",
+    accession     = "GSM9238413 Endoderm",
+    array_version = "EPICv1",
+    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R07C01_Grn.idat",
+    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R07C01_Red.idat"
+  ),
+  list(
+    label         = "Mesoderm Test Sample (GSM9238472)",
+    accession     = "GSM9238472 Mesoderm",
+    array_version = "EPICv1",
+    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R06C01_Grn.idat",
+    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R06C01_Red.idat"
+  ),
+  list(
+    label         = "Endothelial Test Sample (GSM9238440)",
+    accession     = "GSM9238440 Endothelial",
+    array_version = "EPICv1",
+    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206702500016_R07C01_Grn.idat",
+    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206702500016_R07C01_Red.idat"
+  ),
+  list(
+    label         = "Lung Test Sample (GSM9238447)",
+    accession     = "GSM9238447 Lung",
+    array_version = "EPICv1",
+    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Grn.idat",
+    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Red.idat"
+  ),
+  list(
+    label         = "NSC Test Sample (GSM9238490)",
+    accession     = "GSM9238490 NSC",
+    array_version = "EPICv1",
+    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/205038940051_R02C01_Grn.idat",
+    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/205038940051_R02C01_Red.idat"
+  ),
+  list(
+    label         = "Astrocyte Test Sample (GSM9238374)",
+    accession     = "GSM9238374 Astrocyte",
+    array_version = "EPICv1",
+    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Grn.idat",
+    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Red.idat"
+  )
+)
+
+
+# Named vector for the selectInput choices (name = label, value = accession)
+example_choices <- c(
+  "— select a sample —" = "",
+  setNames(
+    sapply(example_samples, `[[`, "accession"),
+    sapply(example_samples, `[[`, "label")
+  )
+)
+
 
 # ---- helper: stable softmax (in case calibrator returns logits)
 softmax_mat <- function(eta) {
@@ -270,6 +343,38 @@ ui <- navbarPage(
             choices = c("450K", "EPICv1", "EPICv2")
           ),
           
+        ui_example_block <- tagList(
+          
+          # Toggle
+          checkboxInput(
+            inputId = "use_example",
+            label   = tags$span(icon("flask"), " Use example data"),
+            value   = FALSE
+          ),
+          
+          # Collapsible panel – only visible when checkbox is ticked
+          conditionalPanel(
+            condition = "input.use_example == true",
+            
+            wellPanel(
+              style = "background:#f0f7ff; border:1px solid #b8d4f0; padding:10px;",
+              
+              selectInput(
+                inputId  = "example_sample",
+                label    = "Choose an example sample:",
+                choices  = example_choices,
+                selected = ""
+              ),
+              
+              # Small status line
+              uiOutput("example_status")
+            )
+          ),
+          
+          hr()
+        ),
+        
+        
           actionButton(
             inputId = "load_samples",
             label   = "Preprocess Data",
@@ -438,31 +543,92 @@ ui <- navbarPage(
 
 # Define the server logic
 server <- function(input, output, session) {
+  # ── Reactive: look up full metadata for the chosen example ──────────────
+  selected_example <- reactive({
+    req(input$use_example, input$example_sample != "")
+    acc <- input$example_sample
+    Find(function(s) s$accession == acc, example_samples)
+  })
+  
+  # ── Function: download both IDATs to tempdir, return their paths ─────────
+  download_example_idats <- function(ex) {
+    tmp <- tempdir()
+    grn_path <- file.path(tmp, paste0(ex$accession, "_Grn.idat"))
+    red_path <- file.path(tmp, paste0(ex$accession, "_Red.idat"))
+    
+    withProgress(message = "Downloading example IDAT files", value = 0, {
+      incProgress(0.5, detail = "Downloading Grn channel…")
+      download.file(ex$grn_url, grn_path, mode = "wb", quiet = TRUE)
+      
+      incProgress(0.5, detail = "Downloading Red channel…")
+      download.file(ex$red_url, red_path, mode = "wb", quiet = TRUE)
+    })
+    
+    list(grn = grn_path, red = red_path)
+  }
+  
+  # ── Auto-populate accession + array version when example is selected ─────
+  observeEvent(selected_example(), {
+    ex <- selected_example()
+    req(ex)
+    updateTextInput(session,   "sample_accession", value = ex$accession)
+    updateSelectInput(session, "array_version",    selected = ex$array_version)
+  })
+  
+  # ── Clear fields when checkbox is unticked ───────────────────────────────
+  observeEvent(input$use_example, {
+    if (!input$use_example) {
+      updateSelectInput(session, "example_sample",   selected = "")
+      updateTextInput(session,   "sample_accession", value = "")
+    }
+  })
+  
+  # ── Status label below the dropdown ──────────────────────────────────────
+  output$example_status <- renderUI({
+    ex <- selected_example()
+    if (is.null(ex)) return(NULL)
+    tags$small(
+      style = "color:#555;",
+      icon("info-circle"),
+      sprintf(" %s array - accession %s idat files will be imported automatically.",
+              ex$array_version, ex$accession)
+    )
+  })
   
   beta_data <- reactive({
-    req(input$idat_files, input$sample_accession, input$array_version)
-    if (nrow(input$idat_files) != 2) {
-      stop("Please upload exactly two IDAT files (one Red and one Grn).")
-    }
+    req(input$sample_accession, input$array_version)
     
-    withProgress(message = "Reading & preprocessing IDATs", value = 0, {
+    # ── A) Example path
+    if (isTRUE(input$use_example) && input$example_sample != "") {
+      ex <- selected_example(); req(ex)
+      paths <- download_example_idats(ex)
+      tmp <- tempdir()
+      basename0 <- file.path(tmp, ex$accession)
+      targets <- data.frame(Sample_accession = ex$accession,
+                            Array_version    = ex$array_version,
+                            Basename         = basename0,
+                            stringsAsFactors = FALSE)
       
-      # 1. Copy files
-      incProgress(0.1, detail = "Copying IDAT files…")
+      # ── B) Upload path
+    } else {
+      req(input$idat_files)
+      if (nrow(input$idat_files) != 2)
+        stop("Please upload exactly two IDAT files (one Red and one Grn).")
       tmp <- tempdir()
       file.copy(input$idat_files$datapath,
-                file.path(tmp, input$idat_files$name),
-                overwrite = TRUE)
-      
-      # 2. Read raw data
-      incProgress(0.2, detail = "Loading raw data…")
+                file.path(tmp, input$idat_files$name), overwrite = TRUE)
       basename0 <- sub("_(Grn|Red)\\.idat$", "", input$idat_files$name[1])
-      targets <- data.frame(
-        Sample_accession = input$sample_accession,
-        Array_version    = input$array_version,
-        Basename         = basename0,
-        stringsAsFactors = FALSE
-      )
+      targets <- data.frame(Sample_accession = input$sample_accession,
+                            Array_version    = input$array_version,
+                            Basename         = basename0,
+                            stringsAsFactors = FALSE)
+    }   
+    
+    # ── Shared preprocessing (runs for both paths)
+    withProgress(message = "Reading & preprocessing IDATs", value = 0, {
+      incProgress(0.2, detail = "Loading raw data…")
+     
+      
       library(tidymodels)
       library(methylumi)
       library(wateRmelon)  
@@ -549,6 +715,7 @@ server <- function(input, output, session) {
       beta_mat
     })
   })
+
   
   
   
@@ -599,7 +766,7 @@ server <- function(input, output, session) {
   })
   
   
-
+  
   # Reactive expression to wrap the CpG anno
   ann450K <- reactive({
     ann450K <- data.table::fread(urls$cpg_anno)
@@ -630,7 +797,7 @@ server <- function(input, output, session) {
     
     beta_mat
   })
-
+  
   
   classification <- eventReactive(input$classify, {
     req(beta_data(), training_data(), sample_anno())
@@ -1009,7 +1176,7 @@ server <- function(input, output, session) {
       marker      <- input$marker
       sample_name <- input$sample_accession
       
-     
+      
       # look up probes for this gene
       incProgress(0.1, detail = "Finding CpGs for gene…")
       celltype    <- input$celltype
@@ -1337,7 +1504,6 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
-
 
 
 
