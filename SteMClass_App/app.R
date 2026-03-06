@@ -314,6 +314,35 @@ a {
 a:hover {
   color: #005c99 !important;
 }
+/* Animate the instructions panel on entry */
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.instructions-panel {
+  animation: fadeSlideIn 0.6s ease-out;
+}
+
+/* Animate each list item in sequence */
+.instructions-panel ol li {
+  opacity: 0;
+  animation: fadeSlideIn 0.5s ease-out forwards;
+}
+.instructions-panel ol li:nth-child(1) { animation-delay: 0.1s; }
+.instructions-panel ol li:nth-child(2) { animation-delay: 0.2s; }
+.instructions-panel ol li:nth-child(3) { animation-delay: 0.3s; }
+.instructions-panel ol li:nth-child(4) { animation-delay: 0.4s; }
+.instructions-panel ol li:nth-child(5) { animation-delay: 0.5s; }
+.instructions-panel ol li:nth-child(6) { animation-delay: 0.6s; }
+.instructions-panel ol li:nth-child(7) { animation-delay: 0.7s; }
+.instructions-panel ol li:nth-child(8) { animation-delay: 0.8s; }
 "
 
 
@@ -357,11 +386,11 @@ ui <- navbarPage(
         ui_example_block <- tagList(
           
           
-          actionButton(
-            inputId = "use_example",
-            label   = tags$span(icon("file-import"), " Import an example from GEO Repository"),
-            style   = "background-color:#f8f9fa  !important; border:1px solid #0072B2 !important; color:#0072B2 !important; font-size:0.9em;"
-          ),
+          checkboxInput(
+  inputId = "use_example",
+  label   = tags$span(icon("file-import"), " Import an example from GEO Repository"),
+  value   = FALSE
+),
           
           
           # Collapsible panel – only visible when checkbox is ticked
@@ -435,7 +464,7 @@ ui <- navbarPage(
           condition = "!output.results_ready",
           
           div(
-            class = "well",
+            class = "well instructions-panel",
             style = "max-width:800px; margin:40px auto; padding:30px; background:#f9f9f9; border-radius:8px;",
             
             h3(icon("circle-info"), " How to use SteMClass",
@@ -1581,6 +1610,7 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
+
 
 
 
