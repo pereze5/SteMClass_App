@@ -306,6 +306,13 @@ custom_css <- "
   display: block;
   width: 100%;       /* optional, makes them full-width */
   margin-bottom: 10px;
+  
+}
+a {
+  color: #2a9fd6 !important;
+}
+a:hover {
+  color: #005c99 !important;
 }
 "
 
@@ -324,7 +331,7 @@ ui <- navbarPage(
       sidebarPanel(
         fileInput(
           inputId = "idat_files",
-          label   = "Upload IDAT Files",
+          label   = tags$span(icon("upload"), " Upload IDAT Files"),
           multiple = TRUE,
           accept   = ".idat"
         ),
@@ -334,12 +341,12 @@ ui <- navbarPage(
           
           textInput(
             inputId = "sample_accession",
-            label   = "Enter Sample ID:"
+            label   = tags$span(icon("tag"), " Enter Sample ID:"),
           ),
           
           selectInput(
             inputId = "array_version",
-            label   = "Array Version:",
+            label   = tags$span(icon("microchip"), " Array Version:"),
             choices = c("450K", "EPICv1", "EPICv2")
           ),
           tags$div(
@@ -350,10 +357,10 @@ ui <- navbarPage(
         ui_example_block <- tagList(
           
           
-          checkboxInput(
+          actionButton(
             inputId = "use_example",
-            label   = tags$span(icon("file-import"), " Import an example from GEO"),
-            value   = FALSE
+            label   = tags$span(icon("file-import"), " Import an example from GEO Repository"),
+            style   = "background-color:#f8f9fa  !important; border:1px solid #0072B2 !important; color:#0072B2 !important; font-size:0.9em;"
           ),
           
           
@@ -362,7 +369,7 @@ ui <- navbarPage(
             condition = "input.use_example == true",
             
             wellPanel(
-              style = "background:#f0f7ff; border:1px solid #b8d4f0; padding:10px;",
+              style = "background:#f8f9fa ; border:1px solid #0072B2; padding:10px;",
               
               selectInput(
                 inputId  = "example_sample",
@@ -387,6 +394,7 @@ ui <- navbarPage(
             icon    = icon("broom"),
             style   = "margin-bottom: 10px;"
           ),
+        hr(),
           
           actionButton(
             inputId = "classify",
@@ -394,6 +402,7 @@ ui <- navbarPage(
             icon    = icon("play"),
             style   = "margin-bottom: 10px;"
           ),
+        hr(),
           
           actionButton(
             inputId = "reset",
@@ -439,13 +448,19 @@ ui <- navbarPage(
                 tags$b("Upload"), " the sample's pair of IDAT files (Red and Green)."
               ),
               tags$li(
-                icon("tag"), " ",
-                tags$b("Enter a Sample ID"), " and select the Array version (450K, EPICv1, or EPICv2)."
+                icon("tag"), " Enter the",
+                tags$b(" Sample ID")
+                ),
+              tags$li(
+                icon("microchip")," Select the", 
+                tags$b(" Array version"), " ", " (450K, EPICv1, or EPICv2)."
               ),
               tags$li(
                 icon("file-import"), " ",
-                tags$b("Alternatively"), " Click ", tags$b("\"Import an example from GEO\""),
-                " to load publicly available test data (GSE308134)."
+                tags$b(""), " Alternatively, click ", tags$b("\"Import an example from GEO Repository\""),
+                " to load publicly available test data ",
+                tags$a(href = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE308134", target = "_blank", "(GSE308134).")
+                
               ),
               tags$li(
                 icon("broom"), " Click ", tags$b("\"Preprocess Data\""), " to prepare the sample."
@@ -453,6 +468,10 @@ ui <- navbarPage(
               tags$li(
                 icon("play"), " Click ", tags$b("\"Run Classification\""), " to classify the sample."
               ),
+              tags$li(
+                icon("magnifying-glass-chart"), "After classification, explore the data visualisation tabs to inspect the sample's DNA methylation profile (heatmaps) and its position relative to the training data (UMAP)."
+              ),
+              
               tags$li(
                 icon("redo"), " Click ", tags$b("\"New Analysis\""), " to start over."
               )
