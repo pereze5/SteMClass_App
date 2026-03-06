@@ -377,6 +377,7 @@ ui <- navbarPage(
           ),
           
           hr()
+        )
         ),
         
         
@@ -400,7 +401,22 @@ ui <- navbarPage(
             icon    = icon("redo")
           ),
           
-          hr()
+        hr(),
+        h4("About SteMClass:"),
+        tags$p(
+          "SteMClass is a DNA methylation-based classifier for identifying the differentiation 
+  state of iPSC-derived samples from a single array-based assay, compatible with all 
+  Illumina methylation array versions (450K, EPICv1, EPICv2)."
+        ),
+        tags$p(
+          "Trained on a curated reference cohort spanning 15 iPSC lines and seven differentiation 
+  states, the classifier achieves high accuracy on both internal validation and independent 
+  external datasets."
+        ),
+        tags$p(
+          "For full methodological details and performance metrics, see the ",
+          tags$a(href = "https://doi.org/10.1101/2025.09.02.673063", target = "_blank", "accompanying publication"),
+          "."
         ) 
       ),  
       
