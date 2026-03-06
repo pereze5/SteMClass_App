@@ -342,15 +342,20 @@ ui <- navbarPage(
             label   = "Array Version:",
             choices = c("450K", "EPICv1", "EPICv2")
           ),
+          tags$div(
+            style = "text-align:center; color:#888; margin:8px 0;",
+            tags$span("— OR —")
+          ),
           
         ui_example_block <- tagList(
           
-          # Toggle
+          
           checkboxInput(
             inputId = "use_example",
-            label   = tags$span(icon("flask"), " Use example data"),
+            label   = tags$span(icon("file-import"), " Import an example from GEO"),
             value   = FALSE
           ),
+          
           
           # Collapsible panel – only visible when checkbox is ticked
           conditionalPanel(
@@ -395,22 +400,56 @@ ui <- navbarPage(
             icon    = icon("redo")
           ),
           
-          hr(),
-          
-          h4("Instructions:"),
-          tags$ol(
-            tags$li("Upload a pair of IDAT files (one Red and one Grn)."),
-            tags$li("Specify the Sample ID and choose the Array version (450K, EPICv1 or EPICv2)."),
-            tags$li("Click “Preprocess Data”"),
-            tags$li("Click “Run Classification” to classify the sample."),
-            tags$li("Click “New Analysis” to classify a new sample.")
-          )
+          hr()
         ) 
       ),  
       
       mainPanel(
-        div(style = "position: relative; padding-bottom: 60px;",
-            uiOutput("classification_ui"))
+        # Instructions panel — visible until results are ready
+        conditionalPanel(
+          condition = "!output.results_ready",
+          
+          div(
+            class = "well",
+            style = "max-width:800px; margin:40px auto; padding:30px; background:#f9f9f9; border-radius:8px;",
+            
+            h3(icon("circle-info"), " How to use SteMClass",
+               style = "margin-top:0; margin-bottom:20px;"),
+            
+            tags$ol(
+              style = "line-height: 2;",
+              tags$li(
+                icon("upload"), " ",
+                tags$b("Upload"), " the sample's pair of IDAT files (Red and Green)."
+              ),
+              tags$li(
+                icon("tag"), " ",
+                tags$b("Enter a Sample ID"), " and select the Array version (450K, EPICv1, or EPICv2)."
+              ),
+              tags$li(
+                icon("file-import"), " ",
+                tags$b("Alternatively"), " Click ", tags$b("\"Import an example from GEO\""),
+                " to load publicly available test data (GSE308134)."
+              ),
+              tags$li(
+                icon("broom"), " Click ", tags$b("\"Preprocess Data\""), " to prepare the sample."
+              ),
+              tags$li(
+                icon("play"), " Click ", tags$b("\"Run Classification\""), " to classify the sample."
+              ),
+              tags$li(
+                icon("redo"), " Click ", tags$b("\"New Analysis\""), " to start over."
+              )
+            )
+          )
+        ),
+        
+        # Results panel — visible once results are ready
+        conditionalPanel(
+          condition = "output.results_ready",
+          div(style = "position: relative; padding-bottom: 60px;",
+              uiOutput("classification_ui"))
+        )
       )
     )
   ),    
@@ -590,7 +629,7 @@ server <- function(input, output, session) {
     tags$small(
       style = "color:#555;",
       icon("info-circle"),
-      sprintf(" %s array - accession %s idat files will be imported automatically.",
+      sprintf(" %s %s IDATs will be imported automatically.",
               ex$array_version, ex$accession)
     )
   })
@@ -906,6 +945,9 @@ server <- function(input, output, session) {
       
     })
   })
+  
+  output$results_ready <- reactive({ !is.null(classification()) })
+  outputOptions(output, "results_ready", suspendWhenHidden = FALSE)
   
   output$classification_ui <- renderUI({
     # wait until classification() has something
