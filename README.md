@@ -5,7 +5,7 @@ The app itself is hosted at https://pereze5-stemclass.share.connect.posit.cloud/
 
 SteMClass is a DNA methylation-based classifier for the characterisation of iPSC-derived cell differentiation state.
 
--   **Classification** using a pre-trained random forest with classifiction cut-off at probability **≥ 0.6** (below that, reported as _Not Classifiable_).
+-   **Classification** using a pre-trained random forest with classifiction cut-off at probability **≥ 0.5** (below that, reported as _Not Classifiable_).
     
 -   **Visualizations:** probability bar chart, UMAP projection against the training cohort, and heatmaps:
     
@@ -86,7 +86,7 @@ At runtime the app streams:
 
 -   Currently the model characterizes 8 distinct differentiation states (see https://doi.org/10.1101/2025.09.02.673063 for details).
     
--   The **probability threshold** (0.6) governs the reject decision.
+-   The **probability threshold** (0.5) governs the reject decision.
     
 -   Gene-level heatmaps rely on **Illumina 450K gene annotations**.
     
