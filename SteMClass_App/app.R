@@ -79,7 +79,7 @@ example_samples <- list(
   list(
     label         = "Lung Test Sample (GSM9238447)",
     accession     = "GSM9238447 Lung",
-    array_version = "EPICv1",
+    array_version = "EPICv2",
     grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Grn.idat",
     red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Red.idat"
   ),
@@ -93,7 +93,7 @@ example_samples <- list(
   list(
     label         = "Astrocyte Test Sample (GSM9238374)",
     accession     = "GSM9238374 Astrocyte",
-    array_version = "EPICv1",
+    array_version = "EPICv2",
     grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Grn.idat",
     red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Red.idat"
   )
