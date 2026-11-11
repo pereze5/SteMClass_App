@@ -1,5 +1,5 @@
 This repository provides the source code for the SteMClass Shiny app detailed in the study https://doi.org/10.1101/2025.09.02.673063. 
-The app itself is hosted at https://pereze5-stemclass.share.connect.posit.cloud/; readers should **use the hosted app** but we are sharing the code for transparency and reproducibility.
+The app itself is hosted at https://stemclass.charite.de/; readers should **use the hosted app** but we are sharing the code for transparency and reproducibility.
 
 ## SteMClass
 
@@ -18,7 +18,7 @@ All model artifacts and reference data are **streamed at runtime** from GitHub R
 
 ## How to use the app (~10 minutes per sample)
 
-1.  Open the **hosted SteMClass app** (https://pereze5-stemclass.share.connect.posit.cloud/).
+1.  Open the **hosted SteMClass app** (https://stemclass.charite.de/).
     
 2.  On the **Classification** tab:
     
