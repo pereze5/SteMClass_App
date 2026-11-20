@@ -1,3 +1,18 @@
+# ==============================================================================
+# DATA SOURCES AND HOSTING
+# ------------------------------------------------------------------------------
+# One app.R for all deployments:
+#  - STEMCLASS_DATA_DIR not set (Posit Connect, local use): model, reference,
+#    example and CNV files are streamed from the GitHub release v1.0-data, and
+#    the Roboto font is loaded from Google Fonts, as before.
+#  - STEMCLASS_DATA_DIR set (self-hosted Docker image at stemclass.charite.de,
+#    /srv/stemclass-data): every file is read from that directory and no web
+#    font is loaded, so the app makes no outbound requests at run time.
+# In both cases reference objects are loaded once per R process (cache).
+# A data file added to the release must also be added to the self-hosted data
+# directory (scripts/fetch_data.sh in the deployment kit).
+# ==============================================================================
+
 options(shiny.maxRequestSize = 80*1024^2)
 
 library(shinyjs)
@@ -9,19 +24,64 @@ library(circlize)
 library(dplyr)
 library(tidyr)
 
-# Load the trained model, training means, and CpG annotation table
+# ==== Data sources: local directory (self-hosted) or GitHub release ====
+STEMCLASS_DATA_DIR <- Sys.getenv("STEMCLASS_DATA_DIR", "")
+STEMCLASS_RELEASE_BASE <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data"
+STEMCLASS_LOCAL <- nzchar(STEMCLASS_DATA_DIR)
 
-# ==== Streamed file URLs ====
+# Path in STEMCLASS_DATA_DIR if set, otherwise the release URL. `url` overrides
+# the remote location for files that are not part of the release.
+stemclass_src <- function(file, url = paste0(STEMCLASS_RELEASE_BASE, "/", file)) {
+  if (STEMCLASS_LOCAL) file.path(STEMCLASS_DATA_DIR, file) else url
+}
+
+is_remote <- function(x) is.character(x) && length(x) == 1L && grepl("^https?://", x, ignore.case = TRUE)
+
+# Argument for readRDS(): a local path, or a url() connection as upstream uses.
+rds_src <- function(src) if (is_remote(src)) url(src) else src
+
+# load() on either a local path or a URL; returns the environment.
+load_rda_src <- function(src) {
+  env <- new.env(parent = emptyenv())
+  if (is_remote(src)) {
+    con <- url(src, "rb")
+    on.exit(close(con), add = TRUE)
+    load(con, envir = env)
+  } else {
+    load(src, envir = env)
+  }
+  env
+}
+
+# Process-wide cache: each object is loaded once per R process.
+stemclass_cache <- new.env(parent = emptyenv())
+cached <- function(key, expr) {
+  if (!exists(key, envir = stemclass_cache, inherits = FALSE)) {
+    assign(key, expr, envir = stemclass_cache)   # `expr` is evaluated lazily, only here
+  }
+  get(key, envir = stemclass_cache, inherits = FALSE)
+}
+
+# Load the trained model, training means, and CpG annotation table
 urls <- list(
-  model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_prob.rds",
-  train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_targets.txt",
-  marker_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_marker_data.txt",
-  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
-  train_data = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_data.txt",
-  cal_model = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/calibration_model_deploy.rds",
-  prepped_rec = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/prepped_recipe.rds",
-  train_gmset = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/gmset_train_2025_flt.rda"
+  model        = stemclass_src("final_rf_fit_prob.rds"),
+  train_anno   = stemclass_src("final_train_targets.txt"),
+  marker_data  = stemclass_src("final_BIH_marker_data.txt"),
+  cpg_anno     = stemclass_src("CpG_450k_annotation_with_top10k_marker.txt"),
+  train_data   = stemclass_src("final_train_data.txt"),
+  cal_model    = stemclass_src("calibration_model_deploy.rds"),
+  prepped_rec  = stemclass_src("prepped_recipe.rds"),
+  train_gmset  = stemclass_src("gmset_train_2025_flt.rda")
 )
+
+if (STEMCLASS_LOCAL) {
+  missing_data <- unlist(urls)[!file.exists(unlist(urls))]
+  if (length(missing_data)) {
+    warning("[SteMClass] Missing files in STEMCLASS_DATA_DIR: ",
+            paste(basename(missing_data), collapse = ", "), call. = FALSE)
+  }
+  message("[SteMClass] Reading data from ", STEMCLASS_DATA_DIR)
+}
 
 # 9‐color Blues palette; interpolate to 255
 
@@ -41,57 +101,57 @@ example_samples <- list(
     label         = "iPSC Test Sample (GSM9238338)",
     accession     = "GSM9238338 iPSC",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206687210042_R03C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206687210042_R03C01_Red.idat"
+    grn_url       = stemclass_src("206687210042_R03C01_Grn.idat"),
+    red_url       = stemclass_src("206687210042_R03C01_Red.idat")
   ),
   list(
     label         = "Ectoderm Test Sample (GSM9238401)",
     accession     = "GSM9238401 Ectoderm",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/204964480134_R08C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/204964480134_R08C01_Red.idat"
+    grn_url       = stemclass_src("204964480134_R08C01_Grn.idat"),
+    red_url       = stemclass_src("204964480134_R08C01_Red.idat")
   ),
   list(
     label         = "Endoderm Test Sample (GSM9238413)",
     accession     = "GSM9238413 Endoderm",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R07C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R07C01_Red.idat"
+    grn_url       = stemclass_src("207705780010_R07C01_Grn.idat"),
+    red_url       = stemclass_src("207705780010_R07C01_Red.idat")
   ),
   list(
     label         = "Mesoderm Test Sample (GSM9238472)",
     accession     = "GSM9238472 Mesoderm",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R06C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R06C01_Red.idat"
+    grn_url       = stemclass_src("207705780010_R06C01_Grn.idat"),
+    red_url       = stemclass_src("207705780010_R06C01_Red.idat")
   ),
   list(
     label         = "Endothelial Test Sample (GSM9238440)",
     accession     = "GSM9238440 Endothelial",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206702500016_R07C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206702500016_R07C01_Red.idat"
+    grn_url       = stemclass_src("206702500016_R07C01_Grn.idat"),
+    red_url       = stemclass_src("206702500016_R07C01_Red.idat")
   ),
   list(
     label         = "Lung Test Sample (GSM9238447)",
     accession     = "GSM9238447 Lung",
     array_version = "EPICv2",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Red.idat"
+    grn_url       = stemclass_src("208010430001_R03C01_Grn.idat"),
+    red_url       = stemclass_src("208010430001_R03C01_Red.idat")
   ),
   list(
     label         = "NSC Test Sample (GSM9238490)",
     accession     = "GSM9238490 NSC",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/205038940051_R02C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/205038940051_R02C01_Red.idat"
+    grn_url       = stemclass_src("205038940051_R02C01_Grn.idat"),
+    red_url       = stemclass_src("205038940051_R02C01_Red.idat")
   ),
   list(
     label         = "Astrocyte Test Sample (GSM9238374)",
     accession     = "GSM9238374 Astrocyte",
     array_version = "EPICv2",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Red.idat"
+    grn_url       = stemclass_src("208010440130_R04C01_Grn.idat"),
+    red_url       = stemclass_src("208010440130_R04C01_Red.idat")
   )
 )
 
@@ -251,7 +311,8 @@ predict_calibrated_all <- function(
 # Reference/annotation paths can be overridden with environment variables.
 # Defaults below preserve the paths used by the supplied standalone CNV script.
 
-CNV_RELEASE_BASE <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data"
+# Self-hosted: local directory (no downloads). Otherwise: the GitHub release.
+CNV_RELEASE_BASE <- if (STEMCLASS_LOCAL) STEMCLASS_DATA_DIR else STEMCLASS_RELEASE_BASE
 
 cnv_config <- list(
   ensemble_hg19 = paste0(CNV_RELEASE_BASE, "/ensemble_gr.rds"),
@@ -269,8 +330,16 @@ cnv_config <- list(
   # UCSC cytoband tables, needed to turn hotspot cytobands (e.g. "20q11.21")
   # into genomic coordinates for each genome build. For a fully self-contained
   # app, upload both files to the release and point these URLs there.
-  cytoband_hg19 = "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz",
-  cytoband_hg38 = "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz",
+  # Self-hosted: stored as cytoBand_hg19.txt.gz / cytoBand_hg38.txt.gz in
+  # STEMCLASS_DATA_DIR (distinct names; both builds are called cytoBand.txt.gz at UCSC).
+  cytoband_hg19 = stemclass_src(
+    "cytoBand_hg19.txt.gz",
+    url = "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz"
+  ),
+  cytoband_hg38 = stemclass_src(
+    "cytoBand_hg38.txt.gz",
+    url = "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz"
+  ),
   
   # conumee2's exclude_regions are hg19 coordinates and are used as shipped for
   # 450K / EPICv1. For EPICv2 (hg38) the lifted-over copy (ex38) is imported
@@ -350,6 +419,17 @@ cnv_is_url <- function(x) {
     grepl("^https?://", x, ignore.case = TRUE)
 }
 
+# Cache file name for a URL. Built from the whole URL path (not only the file
+# name), so different URLs with the same file name (e.g. the hg19 and hg38
+# cytoBand.txt.gz) are cached separately.
+cnv_cache_name <- function(path_or_url) {
+  url_no_query <- sub("\\?.*$", "", path_or_url)
+  path_part <- sub("^https?://[^/]+/", "", url_no_query, ignore.case = TRUE)
+  name <- gsub("[^A-Za-z0-9._-]+", "_", path_part)
+  if (!nzchar(name)) name <- paste0("cnv_asset_", abs(sum(utf8ToInt(path_or_url))))
+  name
+}
+
 cnv_materialize_asset <- function(path_or_url, label = "CNV asset") {
   if (!is.character(path_or_url) || length(path_or_url) != 1L || !nzchar(path_or_url)) {
     stop(label, " is not configured.", call. = FALSE)
@@ -362,12 +442,7 @@ cnv_materialize_asset <- function(path_or_url, label = "CNV asset") {
     return(path_or_url)
   }
   
-  url_no_query <- sub("\\?.*$", "", path_or_url)
-  filename <- basename(url_no_query)
-  if (!nzchar(filename) || identical(filename, "/")) {
-    filename <- paste0("cnv_asset_", abs(sum(utf8ToInt(path_or_url))))
-  }
-  
+  filename <- cnv_cache_name(path_or_url)
   dest <- file.path(cnv_asset_cache_dir, filename)
   
   if (!file.exists(dest) || is.na(file.info(dest)$size) || file.info(dest)$size == 0) {
@@ -403,14 +478,17 @@ cnv_materialize_asset <- function(path_or_url, label = "CNV asset") {
   dest
 }
 
-# Source the custom conumee detail-plot override from the GitHub release.
-try({
+# Source the custom conumee detail-plot override (local data directory when
+# self-hosted, otherwise the GitHub release). A failure is logged, not hidden.
+tryCatch({
   cnv_detailplot_file <- cnv_materialize_asset(
     cnv_config$detailplot_override,
     "CNV detail-plot override"
   )
   source(cnv_detailplot_file, local = FALSE)
-}, silent = TRUE)
+}, error = function(e) {
+  message("[CNV] Detail-plot override not loaded: ", conditionMessage(e))
+})
 
 cnv_require_packages <- function() {
   required <- c(
@@ -523,14 +601,16 @@ cnv_no_progress <- function(value, detail) invisible(NULL)
 # TRUE when an asset is local or already downloaded into the session cache.
 cnv_asset_is_cached <- function(path_or_url) {
   if (!cnv_is_url(path_or_url)) return(TRUE)
-  dest <- file.path(cnv_asset_cache_dir, basename(sub("\\?.*$", "", path_or_url)))
+  dest <- file.path(cnv_asset_cache_dir, cnv_cache_name(path_or_url))
   file.exists(dest) && isTRUE(file.info(dest)$size > 0)
 }
 
 # Report "Downloading ..." or "Loading ... (cached)" and then fetch the asset.
 cnv_fetch_with_progress <- function(path_or_url, label, progress, value) {
   fname <- basename(sub("\\?.*$", "", path_or_url))
-  detail <- if (cnv_asset_is_cached(path_or_url)) {
+  detail <- if (!cnv_is_url(path_or_url)) {
+    paste0("Loading ", label, ": ", fname)
+  } else if (cnv_asset_is_cached(path_or_url)) {
     paste0("Loading ", label, " (cached): ", fname)
   } else {
     paste0("Downloading ", label, " (first run only): ", fname)
@@ -1638,11 +1718,22 @@ cnv_add_plot_labels <- function(cnv, labels, cex = 0.62) {
 thematic::thematic_shiny()
 
 # Define a Bootstrap theme using bs_theme
-theme <- bs_theme(
-  bootswatch = "flatly",
-  primary = "#0072B2",        # Set primary color to match buttons
-  base_font = font_google("Roboto")
-)
+# Self-hosted: no Google Fonts (no outbound request, no visitor IPs sent to
+# Google); Roboto is used where installed, otherwise the next font in the stack.
+# Otherwise: Roboto from Google Fonts, as before.
+theme <- if (STEMCLASS_LOCAL) {
+  bs_theme(
+    bootswatch = "flatly",
+    primary = "#0072B2",        # Set primary color to match buttons
+    base_font = font_collection("Roboto", "Helvetica Neue", "Arial", "sans-serif")
+  )
+} else {
+  bs_theme(
+    bootswatch = "flatly",
+    primary = "#0072B2",        # Set primary color to match buttons
+    base_font = font_google("Roboto")
+  )
+}
 
 # Custom CSS to style the sidebar panel and navbar
 custom_css <- "
@@ -2114,18 +2205,27 @@ server <- function(input, output, session) {
     Find(function(s) s$accession == acc, example_samples)
   })
   
-  # ── Function: download both IDATs to tempdir, return their paths ─────────
+  # ── Function: fetch both IDATs to tempdir, return their paths ────────────
+  # Self-hosted: copied from STEMCLASS_DATA_DIR; otherwise downloaded.
+  fetch_example_file <- function(src, dest) {
+    if (is_remote(src)) {
+      download.file(src, dest, mode = "wb", quiet = TRUE)
+    } else {
+      if (!file.copy(src, dest, overwrite = TRUE)) stop("Example file not found: ", src)
+    }
+  }
+  
   download_example_idats <- function(ex) {
     tmp <- tempdir()
     grn_path <- file.path(tmp, paste0(ex$accession, "_Grn.idat"))
     red_path <- file.path(tmp, paste0(ex$accession, "_Red.idat"))
     
-    withProgress(message = "Downloading example IDAT files", value = 0, {
-      incProgress(0.5, detail = "Downloading Grn channel…")
-      download.file(ex$grn_url, grn_path, mode = "wb", quiet = TRUE)
+    withProgress(message = "Loading example IDAT files", value = 0, {
+      incProgress(0.5, detail = "Grn channel…")
+      fetch_example_file(ex$grn_url, grn_path)
       
-      incProgress(0.5, detail = "Downloading Red channel…")
-      download.file(ex$red_url, red_path, mode = "wb", quiet = TRUE)
+      incProgress(0.5, detail = "Red channel…")
+      fetch_example_file(ex$red_url, red_path)
     })
     
     list(grn = grn_path, red = red_path)
@@ -2340,52 +2440,64 @@ server <- function(input, output, session) {
   })
   
   
+  # Reference objects: loaded once per R process (see cached()), so a
+  # "New Analysis" (session reload) in the same container does not reload them.
+  
   # Reactive expression to wrap the train_data
+  # (training-set beta matrix; used by the gene-level heatmap)
   ref_beta <- reactive({
-    con <- url(urls$train_gmset, "rb")
-    load(con)
-    bVals_train <- getBeta(gmset_train)
-    bVals_train
+    cached("ref_beta", {
+      env <- load_rda_src(urls$train_gmset)
+      minfi::getBeta(env$gmset_train)
+    })
   })
   
   
   training_data <- reactive({
-    # with rownames = sample IDs and a column "Class"
-    train_data <- data.table::fread(urls$train_data)
-    train_data$Class <- factor(train_data$Class_rf)
-    train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
-    if (!"Class" %in% colnames(train_data)) {
-      stop("Global train_data must contain a column named 'Class'")
-    }
-    train_data
+    cached("training_data", {
+      # with rownames = sample IDs and a column "Class"
+      train_data <- data.table::fread(urls$train_data)
+      train_data$Class <- factor(train_data$Class_rf)
+      train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
+      if (!"Class" %in% colnames(train_data)) {
+        stop("Global train_data must contain a column named 'Class'")
+      }
+      train_data
+    })
   })
   
   # Reactive expression to wrap the marker data
   marker_data <- reactive({
-    # with rownames = sample IDs and a column "Class"
-    marker_data <- data.table::fread(urls$marker_data)
-    marker_data$Class <- factor(marker_data$Class_rf)
-    marker_data <- marker_data[, !names(marker_data) %in% "Class_rf", with = FALSE]
-    if (!"Class" %in% colnames(marker_data)) {
-      stop("Global marker_data must contain a column named 'Class'")
-    }
-    marker_data
+    cached("marker_data", {
+      # with rownames = sample IDs and a column "Class"
+      marker_data <- data.table::fread(urls$marker_data)
+      marker_data$Class <- factor(marker_data$Class_rf)
+      marker_data <- marker_data[, !names(marker_data) %in% "Class_rf", with = FALSE]
+      if (!"Class" %in% colnames(marker_data)) {
+        stop("Global marker_data must contain a column named 'Class'")
+      }
+      marker_data
+    })
   })
   
   
   
   # Reactive expression to wrap the CpG anno
   ann450K <- reactive({
-    ann450K <- data.table::fread(urls$cpg_anno)
-    ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
-    ann450K
+    cached("ann450K", {
+      ann450K <- data.table::fread(urls$cpg_anno)
+      ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
+      ann450K
+    })
   })
   
   # Reactive expression to wrap the marker set sample anno
   sample_anno <- reactive({
-    sample_anno <- data.table::fread(urls$train_anno)
-    sample_anno$Class <- as.factor(sample_anno$Class_rf)
-    sample_anno
+    cached("sample_anno", {
+      sample_anno <- data.table::fread(urls$train_anno)
+      sample_anno$Class <- as.factor(sample_anno$Class_rf)
+      sample_anno
+    })
   })
   
   # Reactive expression to wrap the marker beta matrix
@@ -2417,8 +2529,9 @@ server <- function(input, output, session) {
       train_data <- training_data()
       
       
-      # Load reference beta matrix (row = CpGs, col = samples)
-      ref_beta <- ref_beta()
+      # (Self-hosting: the reference beta matrix (ref_beta()) is not used for
+      #  classification, so it is no longer loaded here; the gene heatmap
+      #  loads it when needed.)
       
       
       # prepare our imputation recipe exactly as in model development
@@ -2463,8 +2576,8 @@ server <- function(input, output, session) {
         beta_mat_cpg_by_sample = beta_mat_cpg_by_sample,
         train_data   = train_data,
         prepped_rec  = prepped_rec,
-        rf_fit_path  = url(urls$model),
-        cal_path     = url(urls$cal_model),
+        rf_fit_path  = rds_src(urls$model),
+        cal_path     = rds_src(urls$cal_model),
         threshold    = 0.5,
         apply_reject = TRUE
       )
