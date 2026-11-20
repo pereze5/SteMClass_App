@@ -272,6 +272,16 @@ cnv_config <- list(
   cytoband_hg19 = "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz",
   cytoband_hg38 = "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz",
   
+  # conumee2's exclude_regions are hg19 coordinates and are used as shipped for
+  # 450K / EPICv1. For EPICv2 (hg38) the lifted-over copy (ex38) is imported
+  # from this file. Create it once and upload it to the release:
+  #   data("exclude_regions", package = "conumee2")
+  #   chain <- rtracklayer::import.chain("hg19ToHg38.over.chain")
+  #   ex38  <- GenomicRanges::reduce(unlist(rtracklayer::liftOver(exclude_regions, chain)))
+  #   saveRDS(ex38, "exclude_regions_hg38.rds")
+  # A local file path also works here instead of a URL.
+  exclude_regions_hg38 = paste0(CNV_RELEASE_BASE, "/exclude_regions_hg38.rds"),
+  
   # Existing sex-separated conumee references in the release. For each array
   # the female and male references are pooled at run time into ONE mixed-sex
   # reference: sex does not affect autosomal copy number, so pooling maximises
@@ -423,7 +433,7 @@ cnv_platform_config <- function(platform) {
     platform,
     "450K"   = list(sesame = "HM450",  conumee = "450k",   genome = "hg19", use_exclude_regions = TRUE,  source_label = "450K"),
     "EPICv1" = list(sesame = "EPIC",   conumee = "EPIC",   genome = "hg19", use_exclude_regions = TRUE,  source_label = "EPICv1"),
-    "EPICv2" = list(sesame = "EPICv2", conumee = "EPICv2", genome = "hg38", use_exclude_regions = FALSE, source_label = "EPICv2"),
+    "EPICv2" = list(sesame = "EPICv2", conumee = "EPICv2", genome = "hg38", use_exclude_regions = TRUE,  source_label = "EPICv2"),
     stop("Unsupported CNV platform: ", platform, call. = FALSE)
   )
 }
@@ -561,6 +571,7 @@ cnv_load_resources <- function(platform, progress = cnv_no_progress) {
     genome = cfg$genome
   )
   out$cytobands <- read_ucsc_cytobands(cytoband_path)
+  out$exclude_regions <- cnv_load_exclude_regions(cfg$genome, progress)
   out$hotspots <- make_stemcnv_hotspot_regions(
     hotspots = utils::read.csv(hotspot_path, stringsAsFactors = FALSE, check.names = FALSE),
     cytobands = out$cytobands,
@@ -569,6 +580,39 @@ cnv_load_resources <- function(platform, progress = cnv_no_progress) {
   )
   assign(key, out, envir = cnv_resource_cache)
   out
+}
+
+# ---- Exclusion regions ------------------------------------------------------------
+# hg19 (450K / EPICv1): conumee2's built-in exclude_regions.
+# hg38 (EPICv2): the imported ex38 GRanges (exclude_regions lifted to hg38).
+# If the hg38 file cannot be loaded, EPICv2 runs without exclusions and says so.
+cnv_load_exclude_regions <- function(genome, progress = cnv_no_progress) {
+  if (identical(genome, "hg19")) {
+    env <- new.env(parent = emptyenv())
+    utils::data("exclude_regions", package = "conumee2", envir = env)
+    if (!exists("exclude_regions", envir = env, inherits = FALSE)) return(NULL)
+    return(get("exclude_regions", envir = env, inherits = FALSE))
+  }
+  
+  ex38 <- tryCatch({
+    path <- cnv_fetch_with_progress(
+      cnv_config$exclude_regions_hg38, "hg38 exclusion regions (ex38)", progress, 0.17
+    )
+    readRDS(path)
+  }, error = function(e) {
+    warning("[CNV] hg38 exclusion regions not loaded (", conditionMessage(e),
+            "); EPICv2 will be analysed without exclusion regions.", call. = FALSE)
+    NULL
+  })
+  if (is.null(ex38)) return(NULL)
+  if (!methods::is(ex38, "GRanges")) {
+    warning("[CNV] exclude_regions_hg38.rds is not a GRanges object; it is ignored.", call. = FALSE)
+    return(NULL)
+  }
+  GenomeInfoDb::seqlevelsStyle(ex38) <- "UCSC"   # match conumee's "chr1" naming
+  message(sprintf("[CNV] hg38 exclusion regions loaded: %d regions (%.2f Mb)",
+                  length(ex38), sum(as.numeric(GenomicRanges::width(ex38))) / 1e6))
+  ex38
 }
 
 # ---- StemCNV-check hotspot formatting ------------------------------------------
@@ -1062,14 +1106,9 @@ cnv_build_annotation <- function(platform, resources, bin_size = 50000L,
     )
   }
   
-  excluded <- NULL
-  if (isTRUE(cfg$use_exclude_regions)) {
-    env <- new.env(parent = emptyenv())
-    utils::data("exclude_regions", package = "conumee2", envir = env)
-    if (exists("exclude_regions", envir = env, inherits = FALSE)) {
-      excluded <- get("exclude_regions", envir = env, inherits = FALSE)
-    }
-  }
+  # Genome-matched exclusion regions: conumee2's hg19 list for 450K / EPICv1,
+  # the imported ex38 (hg38) for EPICv2. NULL if unavailable.
+  excluded <- if (isTRUE(cfg$use_exclude_regions)) resources$exclude_regions else NULL
   
   anno <- conumee2::CNV.create_anno(
     bin_minprobes = 15,
