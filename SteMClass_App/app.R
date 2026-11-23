@@ -1,3 +1,18 @@
+# ==============================================================================
+# DATA SOURCES AND HOSTING
+# ------------------------------------------------------------------------------
+# One app.R for all deployments:
+#  - STEMCLASS_DATA_DIR not set (Posit Connect, local use): model, reference,
+#    example and CNV files are streamed from the GitHub release v1.0-data, and
+#    the Roboto font is loaded from Google Fonts, as before.
+#  - STEMCLASS_DATA_DIR set (self-hosted Docker image at stemclass.charite.de,
+#    /srv/stemclass-data): every file is read from that directory and no web
+#    font is loaded, so the app makes no outbound requests at run time.
+# In both cases reference objects are loaded once per R process (cache).
+# A data file added to the release must also be added to the self-hosted data
+# directory (scripts/fetch_data.sh in the deployment kit).
+# ==============================================================================
+
 options(shiny.maxRequestSize = 80*1024^2)
 
 library(shinyjs)
@@ -9,19 +24,64 @@ library(circlize)
 library(dplyr)
 library(tidyr)
 
-# Load the trained model, training means, and CpG annotation table
+# ==== Data sources: local directory (self-hosted) or GitHub release ====
+STEMCLASS_DATA_DIR <- Sys.getenv("STEMCLASS_DATA_DIR", "")
+STEMCLASS_RELEASE_BASE <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data"
+STEMCLASS_LOCAL <- nzchar(STEMCLASS_DATA_DIR)
 
-# ==== Streamed file URLs ====
+# Path in STEMCLASS_DATA_DIR if set, otherwise the release URL. `url` overrides
+# the remote location for files that are not part of the release.
+stemclass_src <- function(file, url = paste0(STEMCLASS_RELEASE_BASE, "/", file)) {
+  if (STEMCLASS_LOCAL) file.path(STEMCLASS_DATA_DIR, file) else url
+}
+
+is_remote <- function(x) is.character(x) && length(x) == 1L && grepl("^https?://", x, ignore.case = TRUE)
+
+# Argument for readRDS(): a local path, or a url() connection as upstream uses.
+rds_src <- function(src) if (is_remote(src)) url(src) else src
+
+# load() on either a local path or a URL; returns the environment.
+load_rda_src <- function(src) {
+  env <- new.env(parent = emptyenv())
+  if (is_remote(src)) {
+    con <- url(src, "rb")
+    on.exit(close(con), add = TRUE)
+    load(con, envir = env)
+  } else {
+    load(src, envir = env)
+  }
+  env
+}
+
+# Process-wide cache: each object is loaded once per R process.
+stemclass_cache <- new.env(parent = emptyenv())
+cached <- function(key, expr) {
+  if (!exists(key, envir = stemclass_cache, inherits = FALSE)) {
+    assign(key, expr, envir = stemclass_cache)   # `expr` is evaluated lazily, only here
+  }
+  get(key, envir = stemclass_cache, inherits = FALSE)
+}
+
+# Load the trained model, training means, and CpG annotation table
 urls <- list(
-  model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_prob.rds",
-  train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_targets.txt",
-  marker_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_marker_data.txt",
-  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
-  train_data = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_data.txt",
-  cal_model = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/calibration_model_deploy.rds",
-  prepped_rec = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/prepped_recipe.rds",
-  train_gmset = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/gmset_train_2025_flt.rda"
+  model        = stemclass_src("final_rf_fit_prob.rds"),
+  train_anno   = stemclass_src("final_train_targets.txt"),
+  marker_data  = stemclass_src("final_BIH_marker_data.txt"),
+  cpg_anno     = stemclass_src("CpG_450k_annotation_with_top10k_marker.txt"),
+  train_data   = stemclass_src("final_train_data.txt"),
+  cal_model    = stemclass_src("calibration_model_deploy.rds"),
+  prepped_rec  = stemclass_src("prepped_recipe.rds"),
+  train_gmset  = stemclass_src("gmset_train_2025_flt.rda")
 )
+
+if (STEMCLASS_LOCAL) {
+  missing_data <- unlist(urls)[!file.exists(unlist(urls))]
+  if (length(missing_data)) {
+    warning("[SteMClass] Missing files in STEMCLASS_DATA_DIR: ",
+            paste(basename(missing_data), collapse = ", "), call. = FALSE)
+  }
+  message("[SteMClass] Reading data from ", STEMCLASS_DATA_DIR)
+}
 
 # 9‐color Blues palette; interpolate to 255
 
@@ -35,63 +95,89 @@ heatmap_scale_blues <- colorRamp2(
 
 REJECT_LABEL <- "reject"
 
+# ==============================================================================
+# CLASSIFICATION / EXPLANATION CONSTANTS
+# ==============================================================================
+
+CLASS_NAMES <- c(
+  "Astrocyte", "Ectoderm", "Endoderm", "Endothelial",
+  "iPSC", "Lung", "Mesoderm", "NSC"
+)
+
+cell_type_cols <- c(
+  Astrocyte   = "#000080",
+  Endothelial = "#D55E00",
+  Mesoderm    = "#E69F00",
+  iPSC        = "#CC79A7",
+  Ectoderm    = "#9AC7DF",
+  NSC         = "#0072B2",
+  Endoderm    = "#A6DBA0",
+  Lung        = "#238B45"
+)
+
+# RF feature contributions are experimental because the deployed ranger model is
+# a probability forest, whereas tree.interpreter expects classification-style
+# metadata. Keep disabled until contribution reconstruction is validated.
+RF_EXPLANATION_ENABLED <- FALSE
+
+
 
 example_samples <- list(
   list(
     label         = "iPSC Test Sample (GSM9238338)",
     accession     = "GSM9238338 iPSC",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206687210042_R03C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206687210042_R03C01_Red.idat"
+    grn_url       = stemclass_src("206687210042_R03C01_Grn.idat"),
+    red_url       = stemclass_src("206687210042_R03C01_Red.idat")
   ),
   list(
     label         = "Ectoderm Test Sample (GSM9238401)",
     accession     = "GSM9238401 Ectoderm",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/204964480134_R08C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/204964480134_R08C01_Red.idat"
+    grn_url       = stemclass_src("204964480134_R08C01_Grn.idat"),
+    red_url       = stemclass_src("204964480134_R08C01_Red.idat")
   ),
   list(
     label         = "Endoderm Test Sample (GSM9238413)",
     accession     = "GSM9238413 Endoderm",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R07C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R07C01_Red.idat"
+    grn_url       = stemclass_src("207705780010_R07C01_Grn.idat"),
+    red_url       = stemclass_src("207705780010_R07C01_Red.idat")
   ),
   list(
     label         = "Mesoderm Test Sample (GSM9238472)",
     accession     = "GSM9238472 Mesoderm",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R06C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R06C01_Red.idat"
+    grn_url       = stemclass_src("207705780010_R06C01_Grn.idat"),
+    red_url       = stemclass_src("207705780010_R06C01_Red.idat")
   ),
   list(
     label         = "Endothelial Test Sample (GSM9238440)",
     accession     = "GSM9238440 Endothelial",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206702500016_R07C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206702500016_R07C01_Red.idat"
+    grn_url       = stemclass_src("206702500016_R07C01_Grn.idat"),
+    red_url       = stemclass_src("206702500016_R07C01_Red.idat")
   ),
   list(
     label         = "Lung Test Sample (GSM9238447)",
     accession     = "GSM9238447 Lung",
     array_version = "EPICv2",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Red.idat"
+    grn_url       = stemclass_src("208010430001_R03C01_Grn.idat"),
+    red_url       = stemclass_src("208010430001_R03C01_Red.idat")
   ),
   list(
     label         = "NSC Test Sample (GSM9238490)",
     accession     = "GSM9238490 NSC",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/205038940051_R02C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/205038940051_R02C01_Red.idat"
+    grn_url       = stemclass_src("205038940051_R02C01_Grn.idat"),
+    red_url       = stemclass_src("205038940051_R02C01_Red.idat")
   ),
   list(
     label         = "Astrocyte Test Sample (GSM9238374)",
     accession     = "GSM9238374 Astrocyte",
     array_version = "EPICv2",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Red.idat"
+    grn_url       = stemclass_src("208010440130_R04C01_Grn.idat"),
+    red_url       = stemclass_src("208010440130_R04C01_Red.idat")
   )
 )
 
@@ -245,13 +331,297 @@ predict_calibrated_all <- function(
 }
 
 # ==============================================================================
+# REFERENCE DEVIATION / SAMPLE EXPLANATION HELPERS
+# ==============================================================================
+
+safe_row_median <- function(x) {
+  apply(x, 1, function(z) {
+    if (all(is.na(z))) return(NA_real_)
+    stats::median(z, na.rm = TRUE)
+  })
+}
+
+safe_row_mad <- function(x) {
+  apply(x, 1, function(z) {
+    z <- z[is.finite(z)]
+    if (length(z) < 2L) return(NA_real_)
+    stats::mad(z, center = stats::median(z), constant = 1.4826, na.rm = TRUE)
+  })
+}
+
+safe_row_quantile <- function(x, prob) {
+  apply(x, 1, function(z) {
+    z <- z[is.finite(z)]
+    if (length(z) == 0L) return(NA_real_)
+    as.numeric(stats::quantile(z, probs = prob, na.rm = TRUE, names = FALSE, type = 7))
+  })
+}
+
+compute_reference_deviation <- function(
+    test_beta,
+    ref_beta,
+    sample_anno,
+    ann450K,
+    reference_class,
+    classifier_cpgs = NULL,
+    mad_floor = 0.01
+) {
+  stopifnot(reference_class %in% CLASS_NAMES)
+  
+  reference_ids <- sample_anno %>%
+    dplyr::filter(as.character(Class) == reference_class) %>%
+    dplyr::pull(Sample_accession) %>%
+    intersect(colnames(ref_beta))
+  
+  if (length(reference_ids) < 2L) {
+    stop("Fewer than two reference samples are available for ", reference_class, ".")
+  }
+  
+  # Biological deviation is based on genuinely measured beta values only.
+  common_cpgs <- intersect(colnames(test_beta), rownames(ref_beta))
+  if (!is.null(classifier_cpgs)) {
+    common_cpgs <- intersect(common_cpgs, classifier_cpgs)
+  }
+  
+  if (length(common_cpgs) == 0L) {
+    stop("No common classifier CpGs were found between the uploaded sample and reference matrix.")
+  }
+  
+  ref_mat <- ref_beta[common_cpgs, reference_ids, drop = FALSE]
+  test_vec <- as.numeric(test_beta[1, common_cpgs, drop = TRUE])
+  names(test_vec) <- common_cpgs
+  
+  ref_median <- safe_row_median(ref_mat)
+  ref_mad <- safe_row_mad(ref_mat)
+  ref_q05 <- safe_row_quantile(ref_mat, 0.05)
+  ref_q95 <- safe_row_quantile(ref_mat, 0.95)
+  n_reference_nonmissing <- rowSums(is.finite(ref_mat))
+  
+  # Protect against near-zero within-class MAD.
+  robust_scale <- ifelse(
+    is.finite(ref_mad),
+    pmax(ref_mad, mad_floor),
+    NA_real_
+  )
+  
+  delta_beta <- test_vec - ref_median
+  robust_z <- delta_beta / robust_scale
+  
+  out <- tibble::tibble(
+    CpG = common_cpgs,
+    Sample_Beta = test_vec,
+    Reference_Median = ref_median,
+    Reference_MAD = ref_mad,
+    Reference_Q05 = ref_q05,
+    Reference_Q95 = ref_q95,
+    Delta_Beta = delta_beta,
+    Robust_Z = robust_z,
+    Abs_Robust_Z = abs(robust_z),
+    N_Reference = n_reference_nonmissing,
+    Outside_90pct = Sample_Beta < Reference_Q05 | Sample_Beta > Reference_Q95,
+    Methylation_Direction = dplyr::case_when(
+      Delta_Beta > 0 ~ "Hypermethylated vs reference",
+      Delta_Beta < 0 ~ "Hypomethylated vs reference",
+      TRUE ~ "No difference"
+    )
+  )
+  
+  annotation_small <- ann450K %>%
+    dplyr::distinct(Name, .keep_all = TRUE) %>%
+    dplyr::select(dplyr::any_of(c(
+      "Name", "chr", "pos", "UCSC_RefGene_Name",
+      "UCSC_RefGene_Group", "Relation_to_UCSC_CpG_Island", "Marker"
+    )))
+  
+  out <- out %>%
+    dplyr::left_join(annotation_small, by = c("CpG" = "Name"))
+  
+  finite_sample_z <- robust_z[is.finite(robust_z)]
+  sample_deviation_score <- if (length(finite_sample_z)) {
+    stats::median(abs(finite_sample_z))
+  } else {
+    NA_real_
+  }
+  
+  # Put bona fide reference samples onto the same robust within-class scale.
+  ref_z <- sweep(ref_mat, 1, ref_median, "-")
+  ref_z <- sweep(ref_z, 1, robust_scale, "/")
+  reference_deviation_scores <- apply(ref_z, 2, function(z) {
+    z <- z[is.finite(z)]
+    if (!length(z)) return(NA_real_)
+    stats::median(abs(z))
+  })
+  reference_deviation_scores <- reference_deviation_scores[is.finite(reference_deviation_scores)]
+  
+  deviation_percentile <- if (
+    is.finite(sample_deviation_score) && length(reference_deviation_scores)
+  ) {
+    100 * mean(reference_deviation_scores <= sample_deviation_score)
+  } else {
+    NA_real_
+  }
+  
+  list(
+    table = out,
+    reference_class = reference_class,
+    reference_ids = reference_ids,
+    reference_matrix = ref_mat,
+    n_reference_samples = length(reference_ids),
+    n_cpgs = nrow(out),
+    sample_deviation_score = sample_deviation_score,
+    reference_deviation_scores = reference_deviation_scores,
+    deviation_percentile = deviation_percentile
+  )
+}
+
+summarise_deviation_by_gene <- function(cpg_table) {
+  if (!"UCSC_RefGene_Name" %in% names(cpg_table)) return(tibble::tibble())
+  
+  cpg_table %>%
+    dplyr::mutate(Gene = as.character(UCSC_RefGene_Name)) %>%
+    tidyr::separate_rows(Gene, sep = ";") %>%
+    dplyr::mutate(Gene = stringr::str_trim(Gene)) %>%
+    dplyr::filter(!is.na(Gene), Gene != "", is.finite(Abs_Robust_Z)) %>%
+    dplyr::distinct(CpG, Gene, .keep_all = TRUE) %>%
+    dplyr::group_by(Gene) %>%
+    dplyr::summarise(
+      N_CpGs = dplyr::n_distinct(CpG),
+      Median_Abs_Z = stats::median(Abs_Robust_Z, na.rm = TRUE),
+      Max_Abs_Z = max(Abs_Robust_Z, na.rm = TRUE),
+      Median_Delta_Beta = stats::median(Delta_Beta, na.rm = TRUE),
+      Max_Abs_Delta_Beta = max(abs(Delta_Beta), na.rm = TRUE),
+      N_Outside_90pct = sum(Outside_90pct, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    dplyr::filter(is.finite(Median_Abs_Z)) %>%
+    dplyr::arrange(dplyr::desc(Median_Abs_Z), dplyr::desc(N_CpGs))
+}
+
+rank_explanation_cpgs <- function(explanation_table, ranking = "reference", top_n = 30) {
+  dat <- explanation_table
+  
+  if (ranking == "reference") {
+    dat <- dat %>% dplyr::arrange(dplyr::desc(Abs_Robust_Z))
+  } else if (ranking == "delta") {
+    dat <- dat %>% dplyr::arrange(dplyr::desc(abs(Delta_Beta)))
+  } else if (ranking == "combined" && "Explanation_Priority" %in% names(dat) &&
+             any(is.finite(dat$Explanation_Priority))) {
+    dat <- dat %>% dplyr::arrange(dplyr::desc(Explanation_Priority))
+  } else if (ranking == "rf_away" && "RF_Contribution" %in% names(dat) &&
+             any(is.finite(dat$RF_Contribution))) {
+    dat <- dat %>% dplyr::arrange(RF_Contribution)
+  } else if (ranking == "rf_toward" && "RF_Contribution" %in% names(dat) &&
+             any(is.finite(dat$RF_Contribution))) {
+    dat <- dat %>% dplyr::arrange(dplyr::desc(RF_Contribution))
+  } else {
+    dat <- dat %>% dplyr::arrange(dplyr::desc(Abs_Robust_Z))
+  }
+  
+  dat %>%
+    dplyr::filter(is.finite(Abs_Robust_Z)) %>%
+    dplyr::slice_head(n = as.integer(top_n))
+}
+
+build_tree_interpreter_explainer <- function(rf_fit, train_data, prepped_rec) {
+  if (!requireNamespace("tree.interpreter", quietly = TRUE)) {
+    stop("Package 'tree.interpreter' is not installed.")
+  }
+  
+  ranger_fit <- if (inherits(rf_fit, "workflow")) {
+    workflows::extract_fit_parsnip(rf_fit)$fit
+  } else if (inherits(rf_fit, "model_fit")) {
+    rf_fit$fit
+  } else if (inherits(rf_fit, "ranger")) {
+    rf_fit
+  } else {
+    stop("Could not extract a ranger model from object of class: ",
+         paste(class(rf_fit), collapse = ", "))
+  }
+  
+  if (!inherits(ranger_fit, "ranger")) stop("Underlying RF model is not a ranger object.")
+  
+  train_baked <- recipes::bake(prepped_rec, new_data = train_data)
+  outcome_col <- intersect(c("Class", "Class_rf"), colnames(train_baked))
+  if (length(outcome_col) != 1L) {
+    stop("Could not uniquely identify the class column in baked training data.")
+  }
+  
+  train_y <- factor(train_baked[[outcome_col]])
+  train_x <- train_baked %>%
+    dplyr::select(-dplyr::all_of(outcome_col)) %>%
+    as.data.frame()
+  
+  non_numeric <- names(train_x)[!vapply(train_x, is.numeric, logical(1))]
+  if (length(non_numeric)) {
+    stop("Non-numeric predictors found in baked RF matrix: ",
+         paste(non_numeric, collapse = ", "))
+  }
+  
+  # Never mutate the deployed classifier object.
+  interpreter_ranger <- ranger_fit
+  original_treetype <- interpreter_ranger$treetype
+  if (identical(original_treetype, "Probability estimation")) {
+    interpreter_ranger$treetype <- "Classification"
+  }
+  
+  tidy_rf <- tree.interpreter::tidyRF(
+    rfobj = interpreter_ranger,
+    trainX = train_x,
+    trainY = train_y
+  )
+  
+  list(
+    tidy_rf = tidy_rf,
+    ranger_fit = ranger_fit,
+    original_treetype = original_treetype,
+    feature_names = tidy_rf$feature.names,
+    class_names = tidy_rf$class.names
+  )
+}
+
+extract_rf_contributions <- function(explainer, baked_sample, reference_class) {
+  stopifnot(reference_class %in% explainer$class_names)
+  
+  x <- as.data.frame(baked_sample)
+  x <- x[, intersect(explainer$feature_names, colnames(x)), drop = FALSE]
+  missing_features <- setdiff(explainer$feature_names, colnames(x))
+  if (length(missing_features)) {
+    stop("Baked explanation sample is missing ", length(missing_features), " RF predictors.")
+  }
+  x <- x[, explainer$feature_names, drop = FALSE]
+  
+  contributions <- tree.interpreter::featureContrib(explainer$tidy_rf, x)
+  if (length(dim(contributions)) == 3L) {
+    contribution_matrix <- contributions[, , 1]
+  } else if (length(dim(contributions)) == 2L) {
+    contribution_matrix <- contributions
+  } else {
+    stop("Unexpected featureContrib output dimensions.")
+  }
+  
+  class_index <- match(reference_class, explainer$class_names)
+  tibble::tibble(
+    CpG = explainer$feature_names,
+    RF_Contribution = contribution_matrix[, class_index]
+  ) %>%
+    dplyr::mutate(
+      RF_Direction = dplyr::case_when(
+        RF_Contribution > 0 ~ paste("Toward", reference_class),
+        RF_Contribution < 0 ~ paste("Away from", reference_class),
+        TRUE ~ "Neutral"
+      )
+    )
+}
+
+# ==============================================================================
 # CNV PROFILING CONFIGURATION + HELPERS
 # ==============================================================================
 # The CNV workflow uses SeSAMe + conumee2 on the original IDAT intensities.
 # Reference/annotation paths can be overridden with environment variables.
 # Defaults below preserve the paths used by the supplied standalone CNV script.
 
-CNV_RELEASE_BASE <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data"
+# Self-hosted: local directory (no downloads). Otherwise: the GitHub release.
+CNV_RELEASE_BASE <- if (STEMCLASS_LOCAL) STEMCLASS_DATA_DIR else STEMCLASS_RELEASE_BASE
 
 cnv_config <- list(
   ensemble_hg19 = paste0(CNV_RELEASE_BASE, "/ensemble_gr.rds"),
@@ -269,8 +639,16 @@ cnv_config <- list(
   # UCSC cytoband tables, needed to turn hotspot cytobands (e.g. "20q11.21")
   # into genomic coordinates for each genome build. For a fully self-contained
   # app, upload both files to the release and point these URLs there.
-  cytoband_hg19 = "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz",
-  cytoband_hg38 = "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz",
+  # Self-hosted: stored as cytoBand_hg19.txt.gz / cytoBand_hg38.txt.gz in
+  # STEMCLASS_DATA_DIR (distinct names; both builds are called cytoBand.txt.gz at UCSC).
+  cytoband_hg19 = stemclass_src(
+    "cytoBand_hg19.txt.gz",
+    url = "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz"
+  ),
+  cytoband_hg38 = stemclass_src(
+    "cytoBand_hg38.txt.gz",
+    url = "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz"
+  ),
   
   # conumee2's exclude_regions are hg19 coordinates and are used as shipped for
   # 450K / EPICv1. For EPICv2 (hg38) the lifted-over copy (ex38) is imported
@@ -350,6 +728,17 @@ cnv_is_url <- function(x) {
     grepl("^https?://", x, ignore.case = TRUE)
 }
 
+# Cache file name for a URL. Built from the whole URL path (not only the file
+# name), so different URLs with the same file name (e.g. the hg19 and hg38
+# cytoBand.txt.gz) are cached separately.
+cnv_cache_name <- function(path_or_url) {
+  url_no_query <- sub("\\?.*$", "", path_or_url)
+  path_part <- sub("^https?://[^/]+/", "", url_no_query, ignore.case = TRUE)
+  name <- gsub("[^A-Za-z0-9._-]+", "_", path_part)
+  if (!nzchar(name)) name <- paste0("cnv_asset_", abs(sum(utf8ToInt(path_or_url))))
+  name
+}
+
 cnv_materialize_asset <- function(path_or_url, label = "CNV asset") {
   if (!is.character(path_or_url) || length(path_or_url) != 1L || !nzchar(path_or_url)) {
     stop(label, " is not configured.", call. = FALSE)
@@ -362,12 +751,7 @@ cnv_materialize_asset <- function(path_or_url, label = "CNV asset") {
     return(path_or_url)
   }
   
-  url_no_query <- sub("\\?.*$", "", path_or_url)
-  filename <- basename(url_no_query)
-  if (!nzchar(filename) || identical(filename, "/")) {
-    filename <- paste0("cnv_asset_", abs(sum(utf8ToInt(path_or_url))))
-  }
-  
+  filename <- cnv_cache_name(path_or_url)
   dest <- file.path(cnv_asset_cache_dir, filename)
   
   if (!file.exists(dest) || is.na(file.info(dest)$size) || file.info(dest)$size == 0) {
@@ -403,14 +787,17 @@ cnv_materialize_asset <- function(path_or_url, label = "CNV asset") {
   dest
 }
 
-# Source the custom conumee detail-plot override from the GitHub release.
-try({
+# Source the custom conumee detail-plot override (local data directory when
+# self-hosted, otherwise the GitHub release). A failure is logged, not hidden.
+tryCatch({
   cnv_detailplot_file <- cnv_materialize_asset(
     cnv_config$detailplot_override,
     "CNV detail-plot override"
   )
   source(cnv_detailplot_file, local = FALSE)
-}, silent = TRUE)
+}, error = function(e) {
+  message("[CNV] Detail-plot override not loaded: ", conditionMessage(e))
+})
 
 cnv_require_packages <- function() {
   required <- c(
@@ -523,14 +910,16 @@ cnv_no_progress <- function(value, detail) invisible(NULL)
 # TRUE when an asset is local or already downloaded into the session cache.
 cnv_asset_is_cached <- function(path_or_url) {
   if (!cnv_is_url(path_or_url)) return(TRUE)
-  dest <- file.path(cnv_asset_cache_dir, basename(sub("\\?.*$", "", path_or_url)))
+  dest <- file.path(cnv_asset_cache_dir, cnv_cache_name(path_or_url))
   file.exists(dest) && isTRUE(file.info(dest)$size > 0)
 }
 
 # Report "Downloading ..." or "Loading ... (cached)" and then fetch the asset.
 cnv_fetch_with_progress <- function(path_or_url, label, progress, value) {
   fname <- basename(sub("\\?.*$", "", path_or_url))
-  detail <- if (cnv_asset_is_cached(path_or_url)) {
+  detail <- if (!cnv_is_url(path_or_url)) {
+    paste0("Loading ", label, ": ", fname)
+  } else if (cnv_asset_is_cached(path_or_url)) {
     paste0("Loading ", label, " (cached): ", fname)
   } else {
     paste0("Downloading ", label, " (first run only): ", fname)
@@ -1638,11 +2027,22 @@ cnv_add_plot_labels <- function(cnv, labels, cex = 0.62) {
 thematic::thematic_shiny()
 
 # Define a Bootstrap theme using bs_theme
-theme <- bs_theme(
-  bootswatch = "flatly",
-  primary = "#0072B2",        # Set primary color to match buttons
-  base_font = font_google("Roboto")
-)
+# Self-hosted: no Google Fonts (no outbound request, no visitor IPs sent to
+# Google); Roboto is used where installed, otherwise the next font in the stack.
+# Otherwise: Roboto from Google Fonts, as before.
+theme <- if (STEMCLASS_LOCAL) {
+  bs_theme(
+    bootswatch = "flatly",
+    primary = "#0072B2",        # Set primary color to match buttons
+    base_font = font_collection("Roboto", "Helvetica Neue", "Arial", "sans-serif")
+  )
+} else {
+  bs_theme(
+    bootswatch = "flatly",
+    primary = "#0072B2",        # Set primary color to match buttons
+    base_font = font_google("Roboto")
+  )
+}
 
 # Custom CSS to style the sidebar panel and navbar
 custom_css <- "
@@ -2030,6 +2430,111 @@ ui <- navbarPage(
     )
   ),
   tabPanel(
+    title = "Cell State Comparison",
+    sidebarLayout(
+      sidebarPanel(
+        h4("Compare sample with a cell state"),
+        tags$p(
+          "Compare the uploaded sample with a selected reference cell state. ",
+          "This analysis measures methylation deviation from the reference cohort ",
+          "independently of the calibrated classification probability."
+        ),
+        selectInput(
+          inputId = "explanation_class",
+          label = "Reference cell state:",
+          choices = CLASS_NAMES,
+          selected = "Endoderm"
+        ),
+        selectInput(
+          inputId = "explanation_ranking",
+          label = "Rank CpGs by:",
+          choices = c(
+            "Deviation from reference (robust Z)" = "reference",
+            "RF contribution away from class" = "rf_away",
+            "RF contribution toward class" = "rf_toward",
+            "Absolute beta difference" = "delta"
+          ),
+          selected = "reference"
+        ),
+        numericInput(
+          inputId = "explanation_top_n",
+          label = "Number of CpGs to display:",
+          value = 30,
+          min = 10,
+          max = 100,
+          step = 10
+        ),
+        checkboxInput(
+          inputId = "include_rf_explanation",
+          label = "Include experimental RF contributions",
+          value = FALSE
+        ),
+        actionButton(
+          inputId = "run_explanation",
+          label = "Analyse Deviation",
+          icon = icon("magnifying-glass-chart")
+        ),
+        hr(),
+        h4("Interpretation"),
+        tags$ul(
+          tags$li(tags$b("Delta beta: "),
+                  "sample beta minus the median beta of the selected reference class."),
+          tags$li(tags$b("Robust Z: "),
+                  "Delta beta scaled by the within-class median absolute deviation."),
+          tags$li(tags$b("RF contribution: "),
+                  "effect on the underlying random-forest score; this does not decompose the calibrated probability.")
+        ),
+        conditionalPanel(
+          condition = "input.include_rf_explanation == true",
+          div(
+            class = "alert alert-warning",
+            tags$b("Experimental RF explanation"),
+            tags$p(
+              "Enable for validation/testing only until feature contributions have been ",
+              "confirmed to reconstruct the deployed random-forest score."
+            )
+          )
+        )
+      ),
+      mainPanel(
+        conditionalPanel(
+          condition = "input.run_explanation == 0",
+          div(
+            class = "well instructions-panel",
+            style = "max-width:900px; margin:40px auto; padding:30px;",
+            h3(icon("magnifying-glass-chart"), " Cell State Comparison"),
+            tags$p(
+              "Run the classifier first, select a reference cell state, then click 'Analyse Deviation'."
+            )
+          )
+        ),
+        uiOutput("explanation_summary"),
+        hr(),
+        h3("Most Deviating CpGs"),
+        withSpinner(
+          plotOutput("explanation_cpg_plot", height = "650px"),
+          type = 5,
+          color = "#0072B2"
+        ),
+        hr(),
+        h3("CpG Detail"),
+        DT::DTOutput("explanation_cpg_table"),
+        downloadButton("download_explanation_cpgs", "Download CpG Results"),
+        hr(),
+        h3("Gene-level Summary"),
+        DT::DTOutput("explanation_gene_table"),
+        downloadButton("download_explanation_genes", "Download Gene Summary"),
+        hr(),
+        h3("Top CpGs Across Reference Samples"),
+        withSpinner(
+          plotOutput("explanation_heatmap", height = "700px"),
+          type = 5,
+          color = "#0072B2"
+        )
+      )
+    )
+  ),
+  tabPanel(
     title = "CNV Profiling",
     sidebarLayout(
       sidebarPanel(
@@ -2114,18 +2619,27 @@ server <- function(input, output, session) {
     Find(function(s) s$accession == acc, example_samples)
   })
   
-  # ── Function: download both IDATs to tempdir, return their paths ─────────
+  # ── Function: fetch both IDATs to tempdir, return their paths ────────────
+  # Self-hosted: copied from STEMCLASS_DATA_DIR; otherwise downloaded.
+  fetch_example_file <- function(src, dest) {
+    if (is_remote(src)) {
+      download.file(src, dest, mode = "wb", quiet = TRUE)
+    } else {
+      if (!file.copy(src, dest, overwrite = TRUE)) stop("Example file not found: ", src)
+    }
+  }
+  
   download_example_idats <- function(ex) {
     tmp <- tempdir()
     grn_path <- file.path(tmp, paste0(ex$accession, "_Grn.idat"))
     red_path <- file.path(tmp, paste0(ex$accession, "_Red.idat"))
     
-    withProgress(message = "Downloading example IDAT files", value = 0, {
-      incProgress(0.5, detail = "Downloading Grn channel…")
-      download.file(ex$grn_url, grn_path, mode = "wb", quiet = TRUE)
+    withProgress(message = "Loading example IDAT files", value = 0, {
+      incProgress(0.5, detail = "Grn channel…")
+      fetch_example_file(ex$grn_url, grn_path)
       
-      incProgress(0.5, detail = "Downloading Red channel…")
-      download.file(ex$red_url, red_path, mode = "wb", quiet = TRUE)
+      incProgress(0.5, detail = "Red channel…")
+      fetch_example_file(ex$red_url, red_path)
     })
     
     list(grn = grn_path, red = red_path)
@@ -2340,52 +2854,64 @@ server <- function(input, output, session) {
   })
   
   
+  # Reference objects: loaded once per R process (see cached()), so a
+  # "New Analysis" (session reload) in the same container does not reload them.
+  
   # Reactive expression to wrap the train_data
+  # (training-set beta matrix; used by the gene-level heatmap)
   ref_beta <- reactive({
-    con <- url(urls$train_gmset, "rb")
-    load(con)
-    bVals_train <- getBeta(gmset_train)
-    bVals_train
+    cached("ref_beta", {
+      env <- load_rda_src(urls$train_gmset)
+      minfi::getBeta(env$gmset_train)
+    })
   })
   
   
   training_data <- reactive({
-    # with rownames = sample IDs and a column "Class"
-    train_data <- data.table::fread(urls$train_data)
-    train_data$Class <- factor(train_data$Class_rf)
-    train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
-    if (!"Class" %in% colnames(train_data)) {
-      stop("Global train_data must contain a column named 'Class'")
-    }
-    train_data
+    cached("training_data", {
+      # with rownames = sample IDs and a column "Class"
+      train_data <- data.table::fread(urls$train_data)
+      train_data$Class <- factor(train_data$Class_rf)
+      train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
+      if (!"Class" %in% colnames(train_data)) {
+        stop("Global train_data must contain a column named 'Class'")
+      }
+      train_data
+    })
   })
   
   # Reactive expression to wrap the marker data
   marker_data <- reactive({
-    # with rownames = sample IDs and a column "Class"
-    marker_data <- data.table::fread(urls$marker_data)
-    marker_data$Class <- factor(marker_data$Class_rf)
-    marker_data <- marker_data[, !names(marker_data) %in% "Class_rf", with = FALSE]
-    if (!"Class" %in% colnames(marker_data)) {
-      stop("Global marker_data must contain a column named 'Class'")
-    }
-    marker_data
+    cached("marker_data", {
+      # with rownames = sample IDs and a column "Class"
+      marker_data <- data.table::fread(urls$marker_data)
+      marker_data$Class <- factor(marker_data$Class_rf)
+      marker_data <- marker_data[, !names(marker_data) %in% "Class_rf", with = FALSE]
+      if (!"Class" %in% colnames(marker_data)) {
+        stop("Global marker_data must contain a column named 'Class'")
+      }
+      marker_data
+    })
   })
   
   
   
   # Reactive expression to wrap the CpG anno
   ann450K <- reactive({
-    ann450K <- data.table::fread(urls$cpg_anno)
-    ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
-    ann450K
+    cached("ann450K", {
+      ann450K <- data.table::fread(urls$cpg_anno)
+      ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
+      ann450K
+    })
   })
   
   # Reactive expression to wrap the marker set sample anno
   sample_anno <- reactive({
-    sample_anno <- data.table::fread(urls$train_anno)
-    sample_anno$Class <- as.factor(sample_anno$Class_rf)
-    sample_anno
+    cached("sample_anno", {
+      sample_anno <- data.table::fread(urls$train_anno)
+      sample_anno$Class <- as.factor(sample_anno$Class_rf)
+      sample_anno
+    })
   })
   
   # Reactive expression to wrap the marker beta matrix
@@ -2406,6 +2932,341 @@ server <- function(input, output, session) {
   })
   
   
+  # Build the optional RF explainer only when explicitly enabled.
+  rf_explainer <- reactive({
+    req(classification())
+    if (!RF_EXPLANATION_ENABLED) return(NULL)
+    
+    res <- classification()
+    req(res$prepped_rec, training_data())
+    
+    rf_fit <- readRDS(rds_src(urls$model))   # local file or release URL
+    build_tree_interpreter_explainer(
+      rf_fit = rf_fit,
+      train_data = training_data(),
+      prepped_rec = res$prepped_rec
+    )
+  })
+  
+  sample_explanation <- eventReactive(input$run_explanation, {
+    req(
+      classification(), beta_data(), ref_beta(), sample_anno(), ann450K(),
+      input$explanation_class
+    )
+    
+    withProgress(
+      message = paste("Comparing sample with", input$explanation_class),
+      value = 0,
+      {
+        incProgress(0.10, detail = "Identifying classifier CpGs...")
+        class_result <- classification()
+        classifier_cpgs <- class_result$expected_cpgs
+        if (is.null(classifier_cpgs)) classifier_cpgs <- colnames(class_result$test_sample)
+        
+        incProgress(0.35, detail = "Computing reference methylation distributions...")
+        explanation <- compute_reference_deviation(
+          test_beta = beta_data(),
+          ref_beta = ref_beta(),
+          sample_anno = sample_anno(),
+          ann450K = ann450K(),
+          reference_class = input$explanation_class,
+          classifier_cpgs = classifier_cpgs
+        )
+        
+        tbl <- explanation$table
+        
+        if (isTRUE(input$include_rf_explanation)) {
+          incProgress(0.25, detail = "Computing RF feature contributions...")
+          
+          if (!RF_EXPLANATION_ENABLED) {
+            showNotification(
+              paste(
+                "RF feature attribution is currently disabled.",
+                "Reference deviation results will still be shown."
+              ),
+              type = "warning", duration = 8
+            )
+          } else {
+            rf_tbl <- tryCatch(
+              extract_rf_contributions(
+                explainer = rf_explainer(),
+                baked_sample = class_result$test_sample,
+                reference_class = input$explanation_class
+              ),
+              error = function(e) {
+                showNotification(
+                  paste("RF contribution analysis failed:", conditionMessage(e)),
+                  type = "warning", duration = NULL
+                )
+                NULL
+              }
+            )
+            
+            if (!is.null(rf_tbl)) {
+              tbl <- tbl %>% dplyr::left_join(rf_tbl, by = "CpG")
+            }
+          }
+        }
+        
+        if ("RF_Contribution" %in% names(tbl)) {
+          tbl <- tbl %>%
+            dplyr::mutate(Explanation_Priority = Abs_Robust_Z * abs(RF_Contribution))
+        } else {
+          tbl$RF_Contribution <- NA_real_
+          tbl$RF_Direction <- NA_character_
+          tbl$Explanation_Priority <- NA_real_
+        }
+        
+        incProgress(0.20, detail = "Summarising genes...")
+        genes <- summarise_deviation_by_gene(tbl)
+        
+        if (any(is.finite(tbl$RF_Contribution))) {
+          rf_gene <- tbl %>%
+            dplyr::filter(!is.na(UCSC_RefGene_Name), UCSC_RefGene_Name != "") %>%
+            dplyr::mutate(Gene = UCSC_RefGene_Name) %>%
+            tidyr::separate_rows(Gene, sep = ";") %>%
+            dplyr::mutate(Gene = stringr::str_trim(Gene)) %>%
+            dplyr::filter(Gene != "") %>%
+            dplyr::group_by(Gene) %>%
+            dplyr::summarise(
+              RF_Contribution_Sum = sum(RF_Contribution, na.rm = TRUE),
+              Max_Explanation_Priority = max(Explanation_Priority, na.rm = TRUE),
+              .groups = "drop"
+            )
+          genes <- genes %>% dplyr::left_join(rf_gene, by = "Gene")
+        }
+        
+        explanation$table <- tbl
+        explanation$genes <- genes
+        incProgress(0.10, detail = "Done.")
+        explanation
+      }
+    )
+  })
+  
+  output$explanation_summary <- renderUI({
+    req(input$run_explanation > 0, sample_explanation(), classification())
+    ex <- sample_explanation()
+    class_name <- ex$reference_class
+    cal_probability <- classification()$probabilities[[class_name]]
+    
+    percentile_text <- if (is.finite(ex$deviation_percentile)) {
+      paste0(round(ex$deviation_percentile, 1), "th percentile")
+    } else {
+      "Not available"
+    }
+    
+    div(
+      class = "well",
+      style = "padding:20px; background:#f8f9fa;",
+      fluidRow(
+        column(3, tags$b("Reference class"),
+               tags$div(style = "font-size:22px; margin-top:6px;", class_name)),
+        column(3, tags$b("Calibrated probability"),
+               tags$div(style = "font-size:22px; margin-top:6px;",
+                        sprintf("%.3f", as.numeric(cal_probability)))),
+        column(3, tags$b("Percentile within cell state"),
+               tags$div(style = "font-size:22px; margin-top:6px;", percentile_text)),
+        column(3, tags$b("Reference samples"),
+               tags$div(style = "font-size:22px; margin-top:6px;", ex$n_reference_samples))
+      ),
+      tags$hr(),
+      tags$p(
+        paste0(
+          "Deviation was evaluated across ", format(ex$n_cpgs, big.mark = ","),
+          " measured classifier CpGs. "
+        ),
+        if (is.finite(ex$deviation_percentile)) {
+          paste0(
+            "The uploaded sample has a larger median standardized methylation deviation than approximately ",
+            round(ex$deviation_percentile, 1), "% of samples in the ",
+            class_name, " reference cohort."
+          )
+        }
+      ),
+      tags$p(
+        style = "font-size:0.9em; color:#666;",
+        "The calibrated probability and methylation-deviation score are different quantities. ",
+        "RF contributions, when enabled, explain the underlying random forest and not the calibrated probability."
+      )
+    )
+  })
+  
+  output$explanation_cpg_plot <- renderPlot({
+    req(sample_explanation())
+    ex <- sample_explanation()
+    dat <- rank_explanation_cpgs(
+      explanation_table = ex$table,
+      ranking = input$explanation_ranking,
+      top_n = input$explanation_top_n
+    )
+    validate(need(nrow(dat) > 0, "No finite CpG deviations are available for plotting."))
+    
+    dat <- dat %>%
+      dplyr::mutate(
+        Label = dplyr::if_else(
+          !is.na(UCSC_RefGene_Name) & UCSC_RefGene_Name != "",
+          paste0(CpG, " (", UCSC_RefGene_Name, ")"),
+          CpG
+        )
+      )
+    
+    ggplot(dat, aes(x = reorder(Label, Robust_Z), y = Robust_Z, fill = Robust_Z > 0)) +
+      geom_col(width = 0.7) +
+      geom_hline(yintercept = 0, linewidth = 0.5) +
+      coord_flip() +
+      scale_fill_manual(
+        values = c("TRUE" = "#D55E00", "FALSE" = "#0072B2"),
+        labels = c("TRUE" = "Hyper vs reference", "FALSE" = "Hypo vs reference"),
+        name = NULL
+      ) +
+      labs(
+        title = paste("Methylation deviations from", ex$reference_class),
+        subtitle = "Robust Z = (sample beta - reference median beta) / reference MAD",
+        x = NULL, y = "Robust Z"
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.text.y = element_text(size = 9)
+      )
+  })
+  
+  output$explanation_cpg_table <- DT::renderDT({
+    req(sample_explanation())
+    dat <- sample_explanation()$table %>%
+      dplyr::arrange(dplyr::desc(Abs_Robust_Z)) %>%
+      dplyr::select(dplyr::any_of(c(
+        "CpG", "UCSC_RefGene_Name", "UCSC_RefGene_Group", "Sample_Beta",
+        "Reference_Median", "Delta_Beta", "Robust_Z", "Reference_Q05",
+        "Reference_Q95", "Outside_90pct", "RF_Contribution", "RF_Direction",
+        "Explanation_Priority", "chr", "pos"
+      )))
+    
+    numeric_cols <- intersect(
+      c("Sample_Beta", "Reference_Median", "Delta_Beta", "Robust_Z",
+        "Reference_Q05", "Reference_Q95", "RF_Contribution", "Explanation_Priority"),
+      names(dat)
+    )
+    
+    dt <- DT::datatable(
+      dat, rownames = FALSE, filter = "top", extensions = "Buttons",
+      options = list(pageLength = 25, scrollX = TRUE, dom = "Bfrtip", buttons = c("copy", "csv"))
+    )
+    if (length(numeric_cols)) dt <- DT::formatRound(dt, columns = numeric_cols, digits = 4)
+    dt
+  })
+  
+  output$explanation_gene_table <- DT::renderDT({
+    req(sample_explanation())
+    genes <- sample_explanation()$genes
+    dt <- DT::datatable(
+      genes, rownames = FALSE, filter = "top",
+      options = list(pageLength = 20, scrollX = TRUE)
+    )
+    numeric_cols <- intersect(
+      c("Median_Abs_Z", "Max_Abs_Z", "Median_Delta_Beta", "Max_Abs_Delta_Beta",
+        "RF_Contribution_Sum", "Max_Explanation_Priority"),
+      names(genes)
+    )
+    if (length(numeric_cols)) dt <- DT::formatRound(dt, columns = numeric_cols, digits = 4)
+    dt
+  })
+  
+  explanation_heatmap_object <- reactive({
+    req(sample_explanation(), beta_data(), ref_beta())
+    ex <- sample_explanation()
+    
+    top_tbl <- rank_explanation_cpgs(
+      explanation_table = ex$table,
+      ranking = input$explanation_ranking,
+      top_n = min(as.integer(input$explanation_top_n), 50L)
+    )
+    
+    selected_cpgs <- top_tbl$CpG
+    selected_cpgs <- intersect(selected_cpgs, rownames(ref_beta()))
+    selected_cpgs <- intersect(selected_cpgs, colnames(beta_data()))
+    validate(need(length(selected_cpgs) > 1L,
+                  "Not enough CpGs are available to build the explanation heatmap."))
+    
+    reference_ids <- intersect(ex$reference_ids, colnames(ref_beta()))
+    ref_mat <- ref_beta()[selected_cpgs, reference_ids, drop = FALSE]
+    
+    test_vec <- beta_data()[1, selected_cpgs, drop = FALSE]
+    test_mat <- t(as.matrix(test_vec))
+    rownames(test_mat) <- selected_cpgs
+    colnames(test_mat) <- input$sample_accession
+    beta_mat <- cbind(ref_mat, test_mat)
+    
+    column_classes <- c(rep(ex$reference_class, ncol(ref_mat)), "Test Sample")
+    col_ha <- ComplexHeatmap::HeatmapAnnotation(
+      Cell_Type = column_classes,
+      col = list(Cell_Type = c(cell_type_cols, `Test Sample` = "#000000"))
+    )
+    
+    anno <- ex$table[match(rownames(beta_mat), ex$table$CpG), ]
+    row_labels <- ifelse(
+      !is.na(anno$UCSC_RefGene_Name) & anno$UCSC_RefGene_Name != "",
+      paste0(anno$CpG, "  ", anno$UCSC_RefGene_Name),
+      anno$CpG
+    )
+    rownames(beta_mat) <- make.unique(row_labels)
+    
+    ComplexHeatmap::Heatmap(
+      beta_mat,
+      name = "Beta Value",
+      top_annotation = col_ha,
+      show_column_names = FALSE,
+      show_row_names = TRUE,
+      cluster_columns = TRUE,
+      cluster_rows = TRUE,
+      row_names_gp = grid::gpar(fontsize = 8),
+      column_title = paste("Uploaded sample vs", ex$reference_class, "reference"),
+      col = heatmap_scale_blues
+    )
+  })
+  
+  output$explanation_heatmap <- renderPlot({
+    ht <- explanation_heatmap_object()
+    req(ht)
+    ComplexHeatmap::draw(
+      ht, heatmap_legend_side = "right", annotation_legend_side = "right"
+    )
+  })
+  
+  output$download_explanation_cpgs <- downloadHandler(
+    filename = function() {
+      paste0(
+        gsub("[^A-Za-z0-9._-]", "_", input$sample_accession),
+        "_vs_", input$explanation_class, "_CpG_deviation.tsv"
+      )
+    },
+    content = function(file) {
+      ex <- sample_explanation()
+      req(ex)
+      utils::write.table(
+        ex$table, file = file, sep = "\t", row.names = FALSE, quote = FALSE, na = ""
+      )
+    }
+  )
+  
+  output$download_explanation_genes <- downloadHandler(
+    filename = function() {
+      paste0(
+        gsub("[^A-Za-z0-9._-]", "_", input$sample_accession),
+        "_vs_", input$explanation_class, "_gene_deviation.tsv"
+      )
+    },
+    content = function(file) {
+      ex <- sample_explanation()
+      req(ex)
+      utils::write.table(
+        ex$genes, file = file, sep = "\t", row.names = FALSE, quote = FALSE, na = ""
+      )
+    }
+  )
+  
   classification <- eventReactive(input$classify, {
     req(beta_data(), training_data(), sample_anno())
     
@@ -2417,8 +3278,9 @@ server <- function(input, output, session) {
       train_data <- training_data()
       
       
-      # Load reference beta matrix (row = CpGs, col = samples)
-      ref_beta <- ref_beta()
+      # (Self-hosting: the reference beta matrix (ref_beta()) is not used for
+      #  classification, so it is no longer loaded here; the gene heatmap
+      #  loads it when needed.)
       
       
       # prepare our imputation recipe exactly as in model development
@@ -2463,8 +3325,8 @@ server <- function(input, output, session) {
         beta_mat_cpg_by_sample = beta_mat_cpg_by_sample,
         train_data   = train_data,
         prepped_rec  = prepped_rec,
-        rf_fit_path  = url(urls$model),
-        cal_path     = url(urls$cal_model),
+        rf_fit_path  = rds_src(urls$model),
+        cal_path     = rds_src(urls$cal_model),
         threshold    = 0.5,
         apply_reject = TRUE
       )
