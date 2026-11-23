@@ -95,32 +95,6 @@ heatmap_scale_blues <- colorRamp2(
 
 REJECT_LABEL <- "reject"
 
-# ==============================================================================
-# CLASSIFICATION / EXPLANATION CONSTANTS
-# ==============================================================================
-
-CLASS_NAMES <- c(
-  "Astrocyte", "Ectoderm", "Endoderm", "Endothelial",
-  "iPSC", "Lung", "Mesoderm", "NSC"
-)
-
-cell_type_cols <- c(
-  Astrocyte   = "#000080",
-  Endothelial = "#D55E00",
-  Mesoderm    = "#E69F00",
-  iPSC        = "#CC79A7",
-  Ectoderm    = "#9AC7DF",
-  NSC         = "#0072B2",
-  Endoderm    = "#A6DBA0",
-  Lung        = "#238B45"
-)
-
-# RF feature contributions are experimental because the deployed ranger model is
-# a probability forest, whereas tree.interpreter expects classification-style
-# metadata. Keep disabled until contribution reconstruction is validated.
-RF_EXPLANATION_ENABLED <- FALSE
-
-
 
 example_samples <- list(
   list(
@@ -331,289 +305,6 @@ predict_calibrated_all <- function(
 }
 
 # ==============================================================================
-# REFERENCE DEVIATION / SAMPLE EXPLANATION HELPERS
-# ==============================================================================
-
-safe_row_median <- function(x) {
-  apply(x, 1, function(z) {
-    if (all(is.na(z))) return(NA_real_)
-    stats::median(z, na.rm = TRUE)
-  })
-}
-
-safe_row_mad <- function(x) {
-  apply(x, 1, function(z) {
-    z <- z[is.finite(z)]
-    if (length(z) < 2L) return(NA_real_)
-    stats::mad(z, center = stats::median(z), constant = 1.4826, na.rm = TRUE)
-  })
-}
-
-safe_row_quantile <- function(x, prob) {
-  apply(x, 1, function(z) {
-    z <- z[is.finite(z)]
-    if (length(z) == 0L) return(NA_real_)
-    as.numeric(stats::quantile(z, probs = prob, na.rm = TRUE, names = FALSE, type = 7))
-  })
-}
-
-compute_reference_deviation <- function(
-    test_beta,
-    ref_beta,
-    sample_anno,
-    ann450K,
-    reference_class,
-    classifier_cpgs = NULL,
-    mad_floor = 0.01
-) {
-  stopifnot(reference_class %in% CLASS_NAMES)
-  
-  reference_ids <- sample_anno %>%
-    dplyr::filter(as.character(Class) == reference_class) %>%
-    dplyr::pull(Sample_accession) %>%
-    intersect(colnames(ref_beta))
-  
-  if (length(reference_ids) < 2L) {
-    stop("Fewer than two reference samples are available for ", reference_class, ".")
-  }
-  
-  # Biological deviation is based on genuinely measured beta values only.
-  common_cpgs <- intersect(colnames(test_beta), rownames(ref_beta))
-  if (!is.null(classifier_cpgs)) {
-    common_cpgs <- intersect(common_cpgs, classifier_cpgs)
-  }
-  
-  if (length(common_cpgs) == 0L) {
-    stop("No common classifier CpGs were found between the uploaded sample and reference matrix.")
-  }
-  
-  ref_mat <- ref_beta[common_cpgs, reference_ids, drop = FALSE]
-  test_vec <- as.numeric(test_beta[1, common_cpgs, drop = TRUE])
-  names(test_vec) <- common_cpgs
-  
-  ref_median <- safe_row_median(ref_mat)
-  ref_mad <- safe_row_mad(ref_mat)
-  ref_q05 <- safe_row_quantile(ref_mat, 0.05)
-  ref_q95 <- safe_row_quantile(ref_mat, 0.95)
-  n_reference_nonmissing <- rowSums(is.finite(ref_mat))
-  
-  # Protect against near-zero within-class MAD.
-  robust_scale <- ifelse(
-    is.finite(ref_mad),
-    pmax(ref_mad, mad_floor),
-    NA_real_
-  )
-  
-  delta_beta <- test_vec - ref_median
-  robust_z <- delta_beta / robust_scale
-  
-  out <- tibble::tibble(
-    CpG = common_cpgs,
-    Sample_Beta = test_vec,
-    Reference_Median = ref_median,
-    Reference_MAD = ref_mad,
-    Reference_Q05 = ref_q05,
-    Reference_Q95 = ref_q95,
-    Delta_Beta = delta_beta,
-    Robust_Z = robust_z,
-    Abs_Robust_Z = abs(robust_z),
-    N_Reference = n_reference_nonmissing,
-    Outside_90pct = Sample_Beta < Reference_Q05 | Sample_Beta > Reference_Q95,
-    Methylation_Direction = dplyr::case_when(
-      Delta_Beta > 0 ~ "Hypermethylated vs reference",
-      Delta_Beta < 0 ~ "Hypomethylated vs reference",
-      TRUE ~ "No difference"
-    )
-  )
-  
-  annotation_small <- ann450K %>%
-    dplyr::distinct(Name, .keep_all = TRUE) %>%
-    dplyr::select(dplyr::any_of(c(
-      "Name", "chr", "pos", "UCSC_RefGene_Name",
-      "UCSC_RefGene_Group", "Relation_to_UCSC_CpG_Island", "Marker"
-    )))
-  
-  out <- out %>%
-    dplyr::left_join(annotation_small, by = c("CpG" = "Name"))
-  
-  finite_sample_z <- robust_z[is.finite(robust_z)]
-  sample_deviation_score <- if (length(finite_sample_z)) {
-    stats::median(abs(finite_sample_z))
-  } else {
-    NA_real_
-  }
-  
-  # Put bona fide reference samples onto the same robust within-class scale.
-  ref_z <- sweep(ref_mat, 1, ref_median, "-")
-  ref_z <- sweep(ref_z, 1, robust_scale, "/")
-  reference_deviation_scores <- apply(ref_z, 2, function(z) {
-    z <- z[is.finite(z)]
-    if (!length(z)) return(NA_real_)
-    stats::median(abs(z))
-  })
-  reference_deviation_scores <- reference_deviation_scores[is.finite(reference_deviation_scores)]
-  
-  deviation_percentile <- if (
-    is.finite(sample_deviation_score) && length(reference_deviation_scores)
-  ) {
-    100 * mean(reference_deviation_scores <= sample_deviation_score)
-  } else {
-    NA_real_
-  }
-  
-  list(
-    table = out,
-    reference_class = reference_class,
-    reference_ids = reference_ids,
-    reference_matrix = ref_mat,
-    n_reference_samples = length(reference_ids),
-    n_cpgs = nrow(out),
-    sample_deviation_score = sample_deviation_score,
-    reference_deviation_scores = reference_deviation_scores,
-    deviation_percentile = deviation_percentile
-  )
-}
-
-summarise_deviation_by_gene <- function(cpg_table) {
-  if (!"UCSC_RefGene_Name" %in% names(cpg_table)) return(tibble::tibble())
-  
-  cpg_table %>%
-    dplyr::mutate(Gene = as.character(UCSC_RefGene_Name)) %>%
-    tidyr::separate_rows(Gene, sep = ";") %>%
-    dplyr::mutate(Gene = stringr::str_trim(Gene)) %>%
-    dplyr::filter(!is.na(Gene), Gene != "", is.finite(Abs_Robust_Z)) %>%
-    dplyr::distinct(CpG, Gene, .keep_all = TRUE) %>%
-    dplyr::group_by(Gene) %>%
-    dplyr::summarise(
-      N_CpGs = dplyr::n_distinct(CpG),
-      Median_Abs_Z = stats::median(Abs_Robust_Z, na.rm = TRUE),
-      Max_Abs_Z = max(Abs_Robust_Z, na.rm = TRUE),
-      Median_Delta_Beta = stats::median(Delta_Beta, na.rm = TRUE),
-      Max_Abs_Delta_Beta = max(abs(Delta_Beta), na.rm = TRUE),
-      N_Outside_90pct = sum(Outside_90pct, na.rm = TRUE),
-      .groups = "drop"
-    ) %>%
-    dplyr::filter(is.finite(Median_Abs_Z)) %>%
-    dplyr::arrange(dplyr::desc(Median_Abs_Z), dplyr::desc(N_CpGs))
-}
-
-rank_explanation_cpgs <- function(explanation_table, ranking = "reference", top_n = 30) {
-  dat <- explanation_table
-  
-  if (ranking == "reference") {
-    dat <- dat %>% dplyr::arrange(dplyr::desc(Abs_Robust_Z))
-  } else if (ranking == "delta") {
-    dat <- dat %>% dplyr::arrange(dplyr::desc(abs(Delta_Beta)))
-  } else if (ranking == "combined" && "Explanation_Priority" %in% names(dat) &&
-             any(is.finite(dat$Explanation_Priority))) {
-    dat <- dat %>% dplyr::arrange(dplyr::desc(Explanation_Priority))
-  } else if (ranking == "rf_away" && "RF_Contribution" %in% names(dat) &&
-             any(is.finite(dat$RF_Contribution))) {
-    dat <- dat %>% dplyr::arrange(RF_Contribution)
-  } else if (ranking == "rf_toward" && "RF_Contribution" %in% names(dat) &&
-             any(is.finite(dat$RF_Contribution))) {
-    dat <- dat %>% dplyr::arrange(dplyr::desc(RF_Contribution))
-  } else {
-    dat <- dat %>% dplyr::arrange(dplyr::desc(Abs_Robust_Z))
-  }
-  
-  dat %>%
-    dplyr::filter(is.finite(Abs_Robust_Z)) %>%
-    dplyr::slice_head(n = as.integer(top_n))
-}
-
-build_tree_interpreter_explainer <- function(rf_fit, train_data, prepped_rec) {
-  if (!requireNamespace("tree.interpreter", quietly = TRUE)) {
-    stop("Package 'tree.interpreter' is not installed.")
-  }
-  
-  ranger_fit <- if (inherits(rf_fit, "workflow")) {
-    workflows::extract_fit_parsnip(rf_fit)$fit
-  } else if (inherits(rf_fit, "model_fit")) {
-    rf_fit$fit
-  } else if (inherits(rf_fit, "ranger")) {
-    rf_fit
-  } else {
-    stop("Could not extract a ranger model from object of class: ",
-         paste(class(rf_fit), collapse = ", "))
-  }
-  
-  if (!inherits(ranger_fit, "ranger")) stop("Underlying RF model is not a ranger object.")
-  
-  train_baked <- recipes::bake(prepped_rec, new_data = train_data)
-  outcome_col <- intersect(c("Class", "Class_rf"), colnames(train_baked))
-  if (length(outcome_col) != 1L) {
-    stop("Could not uniquely identify the class column in baked training data.")
-  }
-  
-  train_y <- factor(train_baked[[outcome_col]])
-  train_x <- train_baked %>%
-    dplyr::select(-dplyr::all_of(outcome_col)) %>%
-    as.data.frame()
-  
-  non_numeric <- names(train_x)[!vapply(train_x, is.numeric, logical(1))]
-  if (length(non_numeric)) {
-    stop("Non-numeric predictors found in baked RF matrix: ",
-         paste(non_numeric, collapse = ", "))
-  }
-  
-  # Never mutate the deployed classifier object.
-  interpreter_ranger <- ranger_fit
-  original_treetype <- interpreter_ranger$treetype
-  if (identical(original_treetype, "Probability estimation")) {
-    interpreter_ranger$treetype <- "Classification"
-  }
-  
-  tidy_rf <- tree.interpreter::tidyRF(
-    rfobj = interpreter_ranger,
-    trainX = train_x,
-    trainY = train_y
-  )
-  
-  list(
-    tidy_rf = tidy_rf,
-    ranger_fit = ranger_fit,
-    original_treetype = original_treetype,
-    feature_names = tidy_rf$feature.names,
-    class_names = tidy_rf$class.names
-  )
-}
-
-extract_rf_contributions <- function(explainer, baked_sample, reference_class) {
-  stopifnot(reference_class %in% explainer$class_names)
-  
-  x <- as.data.frame(baked_sample)
-  x <- x[, intersect(explainer$feature_names, colnames(x)), drop = FALSE]
-  missing_features <- setdiff(explainer$feature_names, colnames(x))
-  if (length(missing_features)) {
-    stop("Baked explanation sample is missing ", length(missing_features), " RF predictors.")
-  }
-  x <- x[, explainer$feature_names, drop = FALSE]
-  
-  contributions <- tree.interpreter::featureContrib(explainer$tidy_rf, x)
-  if (length(dim(contributions)) == 3L) {
-    contribution_matrix <- contributions[, , 1]
-  } else if (length(dim(contributions)) == 2L) {
-    contribution_matrix <- contributions
-  } else {
-    stop("Unexpected featureContrib output dimensions.")
-  }
-  
-  class_index <- match(reference_class, explainer$class_names)
-  tibble::tibble(
-    CpG = explainer$feature_names,
-    RF_Contribution = contribution_matrix[, class_index]
-  ) %>%
-    dplyr::mutate(
-      RF_Direction = dplyr::case_when(
-        RF_Contribution > 0 ~ paste("Toward", reference_class),
-        RF_Contribution < 0 ~ paste("Away from", reference_class),
-        TRUE ~ "Neutral"
-      )
-    )
-}
-
-# ==============================================================================
 # CNV PROFILING CONFIGURATION + HELPERS
 # ==============================================================================
 # The CNV workflow uses SeSAMe + conumee2 on the original IDAT intensities.
@@ -630,7 +321,7 @@ cnv_config <- list(
     CNV_RELEASE_BASE,
     "/CancerGeneCensus_allWed_May_4-08_41_12_2022.csv"
   ),
-  detailplot_override = paste0(CNV_RELEASE_BASE, "/cnv_detailplot_override.R"),
+  #detailplot_override = paste0(CNV_RELEASE_BASE, "/cnv_detailplot_override.R"),
   
   # StemCNV-check curated stem cell aberration hotspots (cytobands + genes),
   # shown in the detail plot annotation together with the CGC hit genes.
@@ -691,20 +382,31 @@ CNV_PLOT_CHRS <- paste0("chr", 1:22)
 # Focal CNV call thresholds (focal log2 ratio).
 CNV_AMP_THRESHOLD    <- 0.6     # focal >= this -> AMP
 CNV_HOMDEL_THRESHOLD <- -0.64   # focal <  this -> HOMDEL
+CNV_HOMDEL_MIN_DIFF  <- 0.3     # ...and focal must also lie at least this far below the
+#    background (focal - background <= -this); otherwise the
+#    gene is not called and the loss stays on its segment only
 
 # Segment states (same cut-offs as GAIN / LOSS in the focal-call logic). Every
 # autosomal segment beyond these is reported in the alterations table; a
 # StemCNV-check hotspot is "hit" when such a segment overlaps it in the curated
 # direction, or when a high-confidence focal call overlaps it.
-CNV_HOTSPOT_GAIN <- 0.15    # segment mean >= this -> GAIN (>= CNV_AMP_THRESHOLD -> AMP)
-CNV_HOTSPOT_LOSS <- -0.17   # segment mean <= this -> LOSS (<  CNV_HOMDEL_THRESHOLD -> HOMDEL)
+CNV_HOTSPOT_GAIN <- 0.15    # segment mean >= this -> GAIN (AMP only via the gene-vs-background call)
+CNV_HOTSPOT_LOSS <- -0.17   # segment mean <= this -> LOSS (HOMDEL only via the gene-vs-background call)
 
-# Sex is predicted with sesame::inferSex() on the same QCDPB-processed data used
-# for CNV. If that fails, minfi::getSex() on the classifier's own-array Noob
-# data is used as a fallback: yMed - xMed < -2 -> Female (calls within the
-# margin below of -2 are marked "borderline").
-CNV_SEX_CUTOFF <- -2
-CNV_SEX_BORDERLINE_MARGIN <- 0.5
+# Probe-coverage filter. Alterations resting on too few array probes are not
+# reported at all (not in the table, hotspot hits or plot labels; the segments
+# download still lists every segment). Coverage is the number of probes retained
+# in the CNV annotation (after reference / sample probe matching) that fall inside
+#  - the segment                          -> CNV_MIN_SEGMENT_PROBES
+#  - the gene of an AMP / HOMDEL call     -> CNV_MIN_GENE_PROBES
+# Bins hold >= 15 probes each, so 150 probes is roughly the minimum of 10 bins.
+# Regions whose probes cannot be counted are kept.
+CNV_MIN_SEGMENT_PROBES <- 150
+CNV_MIN_GENE_PROBES    <- 10
+
+# Sex is always predicted with sesame::inferSex() on the same QCDPB-processed
+# data used for CNV (no other tool is used). If it fails the run stops with an
+# explanatory error message.
 
 # Genome-plot colour scale (identical to the standalone script).
 # y-range of the genome plot: the profile uses +/-1.25 (conumee default); the
@@ -788,16 +490,16 @@ cnv_materialize_asset <- function(path_or_url, label = "CNV asset") {
 }
 
 # Source the custom conumee detail-plot override (local data directory when
-# self-hosted, otherwise the GitHub release). A failure is logged, not hidden.
-tryCatch({
-  cnv_detailplot_file <- cnv_materialize_asset(
-    cnv_config$detailplot_override,
-    "CNV detail-plot override"
-  )
-  source(cnv_detailplot_file, local = FALSE)
-}, error = function(e) {
-  message("[CNV] Detail-plot override not loaded: ", conditionMessage(e))
-})
+# self-hosted, otherwise the GitHub release). A failure is logged.
+#tryCatch({
+#  cnv_detailplot_file <- cnv_materialize_asset(
+#    cnv_config$detailplot_override,
+#    "CNV detail-plot override"
+#  )
+#  source(cnv_detailplot_file, local = FALSE)
+#}, error = function(e) {
+#  message("[CNV] Detail-plot override not loaded: ", conditionMessage(e))
+#})
 
 cnv_require_packages <- function() {
   required <- c(
@@ -1177,19 +879,56 @@ segment_band_label <- function(chr, start, end, cytobands) {
   paste0(sub("^chr", "", chr), if (first == last) first else paste0(first, "-", last))
 }
 
-# One harmonised table of all detected alterations:
-#   - every autosomal SEGMENT beyond the GAIN / LOSS cut-offs (AMP / HOMDEL if
-#     beyond the focal cut-offs), whether or not it overlaps a hotspot;
-#   - every high-confidence FOCAL CALL (AMP / HOMDEL) in CGC genes and CDKN2A/B.
+# Number of retained array probes inside each region (NA where it cannot be counted).
+cnv_count_probes <- function(probes, chr, st, en) {
+  n <- rep(NA_integer_, length(chr))
+  if (is.null(probes) || !length(chr)) return(n)
+  ok <- !is.na(chr) & !is.na(st) & !is.na(en)
+  if (!any(ok)) return(n)
+  n[ok] <- tryCatch(
+    as.integer(GenomicRanges::countOverlaps(
+      GenomicRanges::GRanges(chr[ok], IRanges::IRanges(as.integer(st[ok]), as.integer(en[ok]))),
+      probes)),
+    error = function(e) rep(NA_integer_, sum(ok))
+  )
+  n
+}
+
+# Chromosome / start / end spanned by each gene (NA if the gene is not annotated).
+cnv_gene_extent <- function(gene_regions, genes) {
+  out <- data.frame(chr = rep(NA_character_, length(genes)),
+                    st = rep(NA_integer_, length(genes)),
+                    en = rep(NA_integer_, length(genes)), stringsAsFactors = FALSE)
+  for (i in seq_along(genes)) {
+    reg <- gene_regions[S4Vectors::mcols(gene_regions)$name == genes[i]]
+    if (!length(reg)) next
+    chr <- as.character(GenomicRanges::seqnames(reg))[1]
+    reg <- reg[as.character(GenomicRanges::seqnames(reg)) == chr]
+    out$chr[i] <- chr
+    out$st[i] <- min(GenomicRanges::start(reg))
+    out$en[i] <- max(GenomicRanges::end(reg))
+  }
+  out
+}
+
+# One integrated table of all detected alterations (one row per event):
+#   - every autosomal segment beyond the GAIN / LOSS cut-offs;
+#   - every AMP / HOMDEL in a CGC gene (or CDKN2A/B) from the gene-versus-
+#     background calculation. AMP / HOMDEL states come ONLY from that
+#     calculation; segment means alone give GAIN / LOSS.
+# Duplicates are removed: an AMP / HOMDEL gene lying in a segment of the same
+# direction is merged into that segment's row (state upgraded to AMP / HOMDEL,
+# gene listed under "Genes"). Genes with no matching segment get their own row
+# with the gene coordinates.
 # The "Stem cell hotspot" column lists StemCNV-check hotspots hit by the row:
-# for segments, hotspots overlapped in the curated direction; for focal calls,
-# hotspots overlapping the gene.
+# hotspots overlapped by the segment in the curated direction, plus hotspots
+# overlapping an AMP / HOMDEL gene.
 build_alteration_table <- function(diagnostic, gene_regions, hotspots_all, segments, cytobands) {
-  cols <- c("Alteration", "Source", "CNV state", "log2 ratio", "Chr", "Start", "End",
-            "Size (kb)", "Stem cell hotspot", "Evidence", "Hotspot citations")
+  cols <- c("Alteration", "Genes", "CNV state", "log2 ratio", "Chr", "Start", "End",
+            "Size (kb)", "Stem cell hotspot", "Hotspot citations")
   empty <- stats::setNames(
     data.frame(character(), character(), character(), numeric(), character(), integer(),
-               integer(), numeric(), character(), character(), character(),
+               integer(), numeric(), character(), character(),
                stringsAsFactors = FALSE),
     cols
   )
@@ -1202,70 +941,103 @@ build_alteration_table <- function(diagnostic, gene_regions, hotspots_all, segme
       cites = paste(unique(unlist(strsplit(hs_m$citations[idx], "; "))), collapse = "; ")
     )
   }
-  make_row <- function(alt, src, state, val, chr, st, en, hs, ev) {
+  hotspots_in <- function(chr, st, en, direction = NULL) {
+    if (!length(hotspots_all) || is.na(chr)) return(integer())
+    ov <- S4Vectors::queryHits(GenomicRanges::findOverlaps(
+      hotspots_all, GenomicRanges::GRanges(chr, IRanges::IRanges(st, en))))
+    if (!is.null(direction)) ov <- ov[grepl(direction, hs_m$call_type[ov])]
+    unique(ov)
+  }
+  make_row <- function(alt, genes, state, val, chr, st, en, hs) {
     stats::setNames(data.frame(
-      alt, src, state, round(val, 3), chr, as.integer(st), as.integer(en),
-      round((en - st + 1) / 1000, 1), hs$label, ev, hs$cites,
+      alt, genes, state, round(val, 3), chr, as.integer(st), as.integer(en),
+      round((en - st + 1) / 1000, 1), hs$label, hs$cites,
       stringsAsFactors = FALSE
     ), cols)
   }
   
-  rows <- list()
-  
-  # --- segments ---------------------------------------------------------------
+  # --- segments beyond the GAIN / LOSS cut-offs --------------------------------
   seg <- segments
   seg$seg.mean <- as.numeric(seg$seg.mean)
   seg <- seg[seg$chrom %in% paste0("chr", 1:22) & is.finite(seg$seg.mean) &
                (seg$seg.mean >= CNV_HOTSPOT_GAIN | seg$seg.mean <= CNV_HOTSPOT_LOSS), , drop = FALSE]
-  for (k in seq_len(nrow(seg))) {
-    v <- seg$seg.mean[k]
-    state <- if (v >= CNV_AMP_THRESHOLD) "AMP" else if (v >= CNV_HOTSPOT_GAIN) "GAIN"
-    else if (v < CNV_HOMDEL_THRESHOLD) "HOMDEL" else "LOSS"
-    gain <- v > 0
-    chr <- as.character(seg$chrom[k]); st <- as.integer(seg$loc.start[k]); en <- as.integer(seg$loc.end[k])
-    idx <- integer()
-    if (length(hotspots_all)) {
-      ov <- S4Vectors::queryHits(GenomicRanges::findOverlaps(
-        hotspots_all, GenomicRanges::GRanges(chr, IRanges::IRanges(st, en))))
-      dir_ok <- grepl(if (gain) "gain" else "loss", hs_m$call_type[ov])
-      idx <- unique(ov[dir_ok])
-    }
-    n_probes <- if ("num.mark" %in% names(seg)) seg$num.mark[k] else NA
-    rows[[length(rows) + 1]] <- make_row(
-      alt = segment_band_label(chr, st, en, cytobands),
-      src = "Segment", state = state, val = v, chr = chr, st = st, en = en,
-      hs = hotspot_info(idx),
-      ev = if (is.na(n_probes)) sprintf("segment mean %.2f", v)
-      else sprintf("segment mean %.2f; %s probes", v, format(n_probes, big.mark = ","))
-    )
-  }
+  seg_chr <- as.character(seg$chrom)
+  seg_st  <- as.integer(seg$loc.start)
+  seg_en  <- as.integer(seg$loc.end)
+  seg_gr  <- if (nrow(seg)) GenomicRanges::GRanges(seg_chr, IRanges::IRanges(seg_st, seg_en)) else NULL
+  seg_genes <- vector("list", nrow(seg))   # AMP / HOMDEL calls merged into each segment
   
-  # --- focal calls --------------------------------------------------------------
+  # --- AMP / HOMDEL calls (gene versus background) ------------------------------
+  calls <- list()
   for (i in seq_len(nrow(diagnostic))) {
     g <- diagnostic$V10[i]
+    state <- diagnostic$CNV_state[i]
+    val <- as.numeric(diagnostic$focal[i])
+    bg <- as.numeric(diagnostic$nonfocal[i])
     reg <- gene_regions[S4Vectors::mcols(gene_regions)$name == g]
     if (length(reg)) {
       chr <- as.character(GenomicRanges::seqnames(reg))[1]
       reg <- reg[as.character(GenomicRanges::seqnames(reg)) == chr]
       st <- min(GenomicRanges::start(reg)); en <- max(GenomicRanges::end(reg))
-      idx <- if (length(hotspots_all)) unique(S4Vectors::queryHits(GenomicRanges::findOverlaps(
-        hotspots_all, GenomicRanges::GRanges(chr, IRanges::IRanges(st, en))))) else integer()
     } else {
-      chr <- NA_character_; st <- NA_integer_; en <- NA_integer_; idx <- integer()
+      chr <- NA_character_; st <- NA_integer_; en <- NA_integer_
     }
+    call <- list(gene = g, state = state, val = val, bg = bg, chr = chr, st = st, en = en)
+    
+    # Same-direction segment overlapping the gene -> merge (largest overlap wins).
+    k <- integer()
+    if (!is.na(chr) && !is.null(seg_gr)) {
+      gene_gr <- GenomicRanges::GRanges(chr, IRanges::IRanges(st, en))
+      hits <- GenomicRanges::findOverlaps(gene_gr, seg_gr)
+      cand <- S4Vectors::subjectHits(hits)
+      same_dir <- if (state == "AMP") seg$seg.mean[cand] > 0 else seg$seg.mean[cand] < 0
+      cand <- cand[same_dir]
+      if (length(cand)) {
+        ov_w <- pmin(en, seg_en[cand]) - pmax(st, seg_st[cand]) + 1
+        k <- cand[which.max(ov_w)]
+      }
+    }
+    if (length(k)) {
+      seg_genes[[k]] <- c(seg_genes[[k]], list(call))
+    } else {
+      calls[[length(calls) + 1]] <- call
+    }
+  }
+  
+  rows <- list()
+  
+  # Segment rows (with any merged AMP / HOMDEL genes).
+  for (k in seq_len(nrow(seg))) {
+    v <- seg$seg.mean[k]
+    gain <- v > 0
+    chr <- seg_chr[k]; st <- seg_st[k]; en <- seg_en[k]
+    merged <- seg_genes[[k]]
+    state <- if (gain) "GAIN" else "LOSS"
+    if (length(merged)) state <- if (gain) "AMP" else "HOMDEL"
+    idx <- hotspots_in(chr, st, en, if (gain) "gain" else "loss")
+    for (cl in merged) idx <- union(idx, hotspots_in(cl$chr, cl$st, cl$en))
     rows[[length(rows) + 1]] <- make_row(
-      alt = g, src = "Focal call (CGC)", state = diagnostic$CNV_state[i],
-      val = as.numeric(diagnostic$focal[i]), chr = chr, st = st, en = en,
-      hs = hotspot_info(idx),
-      ev = sprintf("focal log2 %.2f; background %.2f",
-                   as.numeric(diagnostic$focal[i]), as.numeric(diagnostic$nonfocal[i]))
+      alt = segment_band_label(chr, st, en, cytobands),
+      genes = if (length(merged)) paste(vapply(merged, `[[`, character(1), "gene"), collapse = ", ")
+      else "",
+      state = state, val = v, chr = chr, st = st, en = en,
+      hs = hotspot_info(idx)
+    )
+  }
+  
+  # AMP / HOMDEL genes not covered by a same-direction segment.
+  for (cl in calls) {
+    rows[[length(rows) + 1]] <- make_row(
+      alt = if (is.na(cl$chr)) cl$gene else segment_band_label(cl$chr, cl$st, cl$en, cytobands),
+      genes = cl$gene, state = cl$state, val = cl$val,
+      chr = cl$chr, st = cl$st, en = cl$en,
+      hs = hotspot_info(hotspots_in(cl$chr, cl$st, cl$en))
     )
   }
   
   if (!length(rows)) return(empty)
   out <- do.call(rbind, rows)
-  chr_num <- chr_rank(out$Chr)
-  out[order(chr_num, out$Start, out$Source != "Segment", na.last = TRUE), , drop = FALSE]
+  out[order(chr_rank(out$Chr), out$Start, na.last = TRUE), , drop = FALSE]
 }
 
 S4DataFrame_from <- function(df) {
@@ -1402,48 +1174,42 @@ harmonise_anno_ids <- function(anno) {
   anno
 }
 
-# Sex from the QCDPB-processed SeSAMe data (sesame::inferSex); minfi fallback.
-cnv_predict_sex_sesame <- function(sdf, mset = NULL) {
-  sx <- tryCatch(as.character(sesame::inferSex(sdf))[1], error = function(e) NA_character_)
+# Sex from the QCDPB-processed SeSAMe data (sesame::inferSex). There is no
+# fallback: if inferSex() errors or returns anything other than female / male,
+# the CNV run stops with a message that says why and what to check.
+#
+# Current sesame versions take a named vector of beta values and the platform
+# (inferSex(betas, platform)); older versions took the SigDF itself. The betas
+# come from the same QCDPB-processed SigDF as the CNV intensities (masked probes
+# are NA) and the platform is always passed explicitly, because sesame cannot
+# always detect it (e.g. EPICv2 vs EPIC) from the probe IDs.
+cnv_predict_sex_sesame <- function(sdf, platform) {
+  reason <- NULL
+  sesame_platform <- cnv_platform_config(platform)$sesame
+  sx <- tryCatch({
+    fm <- names(formals(sesame::inferSex))
+    if ("betas" %in% fm) {
+      betas <- sesame::getBetas(sdf)   # masked probes -> NA
+      as.character(sesame::inferSex(betas, platform = sesame_platform))[1]
+    } else {
+      as.character(sesame::inferSex(sdf))[1]
+    }
+  }, error = function(e) { reason <<- conditionMessage(e); NA_character_ })
   if (!is.na(sx) && toupper(sx) %in% c("FEMALE", "MALE", "F", "M")) {
     sex <- if (toupper(sx) %in% c("FEMALE", "F")) "Female" else "Male"
-    return(list(sex = sex, diff = NA_real_,
-                note = paste0("sesame inferSex (", CNV_SESAME_PREP, "-processed data)")))
+    return(list(sex = sex, diff = NA_real_))
   }
-  if (!is.null(mset)) {
-    res <- cnv_predict_sex(mset)
-    res$note <- paste0(res$note)
-    return(res)
+  if (is.null(reason)) {
+    reason <- if (is.na(sx)) "inferSex returned no result" else
+      paste0("inferSex returned an unexpected value: '", sx, "'")
   }
-  list(sex = "Indeterminate", diff = NA_real_, note = "sex prediction failed")
-}
-
-# Sex from the sample's own-array Noob MethylSet (minfi::getSex rule).
-cnv_predict_sex <- function(mset) {
-  out <- tryCatch({
-    s <- minfi::getSex(minfi::mapToGenome(mset), cutoff = CNV_SEX_CUTOFF)
-    list(xMed = as.numeric(s$xMed[1]), yMed = as.numeric(s$yMed[1]))
-  }, error = function(e) {
-    # Fallback: same rule computed directly (chromosomes from the array annotation).
-    tryCatch({
-      ann <- minfi::getAnnotation(mset)
-      cn  <- log2(pmax(minfi::getMeth(mset)[, 1] + minfi::getUnmeth(mset)[, 1], 1))
-      chr <- as.character(ann[rownames(mset), "chr"])
-      list(xMed = stats::median(cn[chr == "chrX"], na.rm = TRUE),
-           yMed = stats::median(cn[chr == "chrY"], na.rm = TRUE))
-    }, error = function(e2) NULL)
-  })
-  if (is.null(out) || !is.finite(out$xMed) || !is.finite(out$yMed)) {
-    return(list(sex = "Indeterminate", diff = NA_real_,
-                note = "sex prediction failed (chrX/chrY probes unavailable)"))
-  }
-  diff <- out$yMed - out$xMed
-  sex <- if (diff < CNV_SEX_CUTOFF) "Female" else "Male"
-  if (abs(diff - CNV_SEX_CUTOFF) < CNV_SEX_BORDERLINE_MARGIN) sex <- paste(sex, "(borderline)")
-  list(
-    sex = sex,
-    diff = diff,
-    note = sprintf("minfi getSex: yMed - xMed = %.2f (female < %.0f)", diff, CNV_SEX_CUTOFF)
+  stop(
+    "Sex could not be inferred with sesame::inferSex() on the ", CNV_SESAME_PREP,
+    "-processed data (", reason, "). ",
+    "Check that the IDAT pair really comes from the selected array (",
+    platform,
+    ") and that the sample is not largely failed or masked, then run CNV profiling again.",
+    call. = FALSE
   )
 }
 
@@ -1682,7 +1448,7 @@ cnv_call_focal_events <- function(segment_df, detail_df, resources, sample_id) {
       delta = ifelse(has_nonfocal, focal - nonfocal, NA_real_),
       CNV_state = dplyr::case_when(
         is.na(focal) ~ NA_character_,
-        focal < CNV_HOMDEL_THRESHOLD ~ "HOMDEL",
+        focal < CNV_HOMDEL_THRESHOLD & (!has_nonfocal | delta <= -CNV_HOMDEL_MIN_DIFF) ~ "HOMDEL",
         focal >= CNV_AMP_THRESHOLD ~ "AMP",
         focal <= -0.17 & (!has_nonfocal | nonfocal <= 0 | delta < -0.17) ~ "LOSS",
         focal >= 0.15 & (!has_nonfocal | nonfocal >= 0 | delta > 0.17) ~ "GAIN",
@@ -1720,7 +1486,7 @@ run_cnv_profile <- function(prefix, mset, sample_id, platform, bin_size = 50000L
   if (nzchar(CNV_SESAME_PREP)) sig <- sesame::prepSesame(sig, CNV_SESAME_PREP)
   
   progress(0.08, "Predicting sex (sesame inferSex)…")
-  sex_call <- cnv_predict_sex_sesame(sig, mset)
+  sex_call <- cnv_predict_sex_sesame(sig, platform)
   
   query_int <- sesame::totalIntensities(sig)
   query_mat <- matrix(query_int, ncol = 1, dimnames = list(names(query_int), "query"))
@@ -1787,13 +1553,26 @@ run_cnv_profile <- function(prefix, mset, sample_id, platform, bin_size = 50000L
   segment_df <- cnv_read_written_table(tmp_segments)
   progress(
     0.80,
-    paste0("Calling focal AMP/HOMDEL events across ", format(nrow(segment_df), big.mark = ","), " segments…")
+    paste0("Calling AMP/HOMDEL events across ", format(nrow(segment_df), big.mark = ","), " segments…")
   )
   focal <- cnv_call_focal_events(segment_df, detail_df, resources, sample_id)
   diagnostic <- as.data.frame(focal$diagnostic)
   
   segments_clean <- cnv_harmonise_segments(segment_df)
-  progress(0.83, paste0("Predicted sex: ", sex_call$sex, " (", sex_call$note, ")"))
+  
+  # Probe-coverage filter: segments / AMP-HOMDEL genes covered by too few probes
+  # are dropped from the reported results (table, hotspot hits, plot labels).
+  probes_gr   <- tryCatch(cnv@anno@probes, error = function(e) NULL)
+  gene_regions <- make_cgc_segment_genes(resources$ensembl, resources$cgc, cfg$genome)
+  n_seg <- cnv_count_probes(probes_gr, as.character(segments_clean$chrom),
+                            segments_clean$loc.start, segments_clean$loc.end)
+  segments_supported <- segments_clean[is.na(n_seg) | n_seg >= CNV_MIN_SEGMENT_PROBES, , drop = FALSE]
+  if (nrow(diagnostic)) {
+    ext <- cnv_gene_extent(gene_regions, diagnostic$V10)
+    n_gene <- cnv_count_probes(probes_gr, ext$chr, ext$st, ext$en)
+    diagnostic <- diagnostic[is.na(n_gene) | n_gene >= CNV_MIN_GENE_PROBES, , drop = FALSE]
+  }
+  progress(0.83, paste0("Predicted sex: ", sex_call$sex))
   
   # Per-sample summary strings, as in diagnostics_results_<date>.txt
   # (e.g. "EGFR_AMP_1.234|MYC_AMP_0.512").
@@ -1827,7 +1606,7 @@ run_cnv_profile <- function(prefix, mset, sample_id, platform, bin_size = 50000L
     S4Vectors::mcols(focal_regions)$label <- paste(S4Vectors::mcols(focal_regions)$name, st)
   }
   
-  hotspot_hits <- find_hotspot_hits(resources$hotspots, segments_clean, focal_regions)
+  hotspot_hits <- find_hotspot_hits(resources$hotspots, segments_supported, focal_regions)
   hotspot_summary <- if (length(hotspot_hits)) {
     paste(paste0(S4Vectors::mcols(hotspot_hits)$name, " [",
                  S4Vectors::mcols(hotspot_hits)$call_type, "; ",
@@ -1838,9 +1617,9 @@ run_cnv_profile <- function(prefix, mset, sample_id, platform, bin_size = 50000L
   
   alterations <- build_alteration_table(
     diagnostic   = diagnostic,
-    gene_regions = make_cgc_segment_genes(resources$ensembl, resources$cgc, cfg$genome),
+    gene_regions = gene_regions,
     hotspots_all = resources$hotspots,
-    segments     = segments_clean,
+    segments     = segments_supported,
     cytobands    = resources$cytobands
   )
   
@@ -1888,19 +1667,8 @@ run_cnv_profile <- function(prefix, mset, sample_id, platform, bin_size = 50000L
   plot_labels$value[!is.finite(plot_labels$value)] <- 0
   plot_detail <- nrow(plot_labels) > 0
   
-  plot_main <- if (plot_detail && length(hit_genes) && length(hotspots)) {
-    paste0(sample_id, " - focal hits + stem cell hotspot hits (", cfg$source_label, ", ", ref_label,
-           "; inferred sex: ", sex_call$sex, ")")
-  } else if (plot_detail && length(hit_genes)) {
-    paste0(sample_id, " - focal hits only (", cfg$source_label, ", ", ref_label,
-           "; inferred sex: ", sex_call$sex, ")")
-  } else if (plot_detail) {
-    paste0(sample_id, " - stem cell hotspot hits; no focal hits (", cfg$source_label, ", ", ref_label,
-           "; inferred sex: ", sex_call$sex, ")")
-  } else {
-    paste0(sample_id, " (", cfg$source_label, ", ", ref_label,
-           "; inferred sex: ", sex_call$sex, ") - no focal hits")
-  }
+  plot_main <- paste0(sample_id, " CNV hits (", cfg$source_label, ", ", ref_label,
+                      "; inferred sex: ", sex_call$sex, ")")
   
   progress(
     0.98,
@@ -2430,119 +2198,14 @@ ui <- navbarPage(
     )
   ),
   tabPanel(
-    title = "Cell State Comparison",
-    sidebarLayout(
-      sidebarPanel(
-        h4("Compare sample with a cell state"),
-        tags$p(
-          "Compare the uploaded sample with a selected reference cell state. ",
-          "This analysis measures methylation deviation from the reference cohort ",
-          "independently of the calibrated classification probability."
-        ),
-        selectInput(
-          inputId = "explanation_class",
-          label = "Reference cell state:",
-          choices = CLASS_NAMES,
-          selected = "Endoderm"
-        ),
-        selectInput(
-          inputId = "explanation_ranking",
-          label = "Rank CpGs by:",
-          choices = c(
-            "Deviation from reference (robust Z)" = "reference",
-            "RF contribution away from class" = "rf_away",
-            "RF contribution toward class" = "rf_toward",
-            "Absolute beta difference" = "delta"
-          ),
-          selected = "reference"
-        ),
-        numericInput(
-          inputId = "explanation_top_n",
-          label = "Number of CpGs to display:",
-          value = 30,
-          min = 10,
-          max = 100,
-          step = 10
-        ),
-        checkboxInput(
-          inputId = "include_rf_explanation",
-          label = "Include experimental RF contributions",
-          value = FALSE
-        ),
-        actionButton(
-          inputId = "run_explanation",
-          label = "Analyse Deviation",
-          icon = icon("magnifying-glass-chart")
-        ),
-        hr(),
-        h4("Interpretation"),
-        tags$ul(
-          tags$li(tags$b("Delta beta: "),
-                  "sample beta minus the median beta of the selected reference class."),
-          tags$li(tags$b("Robust Z: "),
-                  "Delta beta scaled by the within-class median absolute deviation."),
-          tags$li(tags$b("RF contribution: "),
-                  "effect on the underlying random-forest score; this does not decompose the calibrated probability.")
-        ),
-        conditionalPanel(
-          condition = "input.include_rf_explanation == true",
-          div(
-            class = "alert alert-warning",
-            tags$b("Experimental RF explanation"),
-            tags$p(
-              "Enable for validation/testing only until feature contributions have been ",
-              "confirmed to reconstruct the deployed random-forest score."
-            )
-          )
-        )
-      ),
-      mainPanel(
-        conditionalPanel(
-          condition = "input.run_explanation == 0",
-          div(
-            class = "well instructions-panel",
-            style = "max-width:900px; margin:40px auto; padding:30px;",
-            h3(icon("magnifying-glass-chart"), " Cell State Comparison"),
-            tags$p(
-              "Run the classifier first, select a reference cell state, then click 'Analyse Deviation'."
-            )
-          )
-        ),
-        uiOutput("explanation_summary"),
-        hr(),
-        h3("Most Deviating CpGs"),
-        withSpinner(
-          plotOutput("explanation_cpg_plot", height = "650px"),
-          type = 5,
-          color = "#0072B2"
-        ),
-        hr(),
-        h3("CpG Detail"),
-        DT::DTOutput("explanation_cpg_table"),
-        downloadButton("download_explanation_cpgs", "Download CpG Results"),
-        hr(),
-        h3("Gene-level Summary"),
-        DT::DTOutput("explanation_gene_table"),
-        downloadButton("download_explanation_genes", "Download Gene Summary"),
-        hr(),
-        h3("Top CpGs Across Reference Samples"),
-        withSpinner(
-          plotOutput("explanation_heatmap", height = "700px"),
-          type = 5,
-          color = "#0072B2"
-        )
-      )
-    )
-  ),
-  tabPanel(
     title = "CNV Profiling",
     sidebarLayout(
       sidebarPanel(
         h4("Copy Number Profiling"),
         tags$p(
-          "CNV profiling reads the uploaded IDAT pair on its own array (450K, EPICv1 or EPICv2) with SeSAMe (QCDPB) ",
-          "and fits it with conumee2 against that array's female and male control references, pooled into one mixed-sex reference. ",
-          "Copy number is reported for the autosomes; sex is predicted separately with SeSAMe inferSex."
+          "CNV profiling reads the uploaded IDAT pair (450K, EPICv1 or EPICv2) with SeSAMe (QCDPB) ",
+          "and fits it with conumee2 against the array-specific control references.",
+          "Copy number is reported for the autosomes, sex is predicted with SeSAMe inferSex."
         ),
         numericInput(
           inputId = "cnv_bin_size",
@@ -2562,8 +2225,7 @@ ui <- navbarPage(
           tags$li("Upload the Red/Green IDAT pair and enter the sample ID on the Classification tab."),
           tags$li("Select the correct array version on the Classification tab."),
           tags$li('Click "Run CNV Profiling".'),
-          tags$li("Inspect the autosomal profile, the predicted sex and high-confidence focal AMP/HOMDEL calls."),
-          tags$li("chrX and chrY are not shown.")
+          tags$li("Inspect the autosomal profile, the predicted sex and high-confidence calls.")
         ),
         hr(),
         uiOutput("cnv_input_summary")
@@ -2589,17 +2251,15 @@ ui <- navbarPage(
             color = "#0072B2"
           ),
           fluidRow(
-            column(3, downloadButton("download_cnv_plot", "Download CNV Plot")),
-            column(3, downloadButton("download_cnv_plot_unlabelled", "Download Unlabelled Plot")),
-            column(3, downloadButton("download_cnv_segments", "Download Segments")),
-            column(3, downloadButton("download_cnv_focal", "Download Alterations"))
+            column(4, downloadButton("download_cnv_plot", "Download Labelled Plot")),
+            column(4, downloadButton("download_cnv_plot_unlabelled", "Download Unlabelled Plot")),
+            column(4, downloadButton("download_cnv_focal", "Download Alterations Table"))
           ),
           hr(),
           h3("Detected alterations"),
           tags$p(
-            "All autosomal segments with a gain (log2 ≥ ", CNV_HOTSPOT_GAIN, ") or loss (log2 ≤ ", CNV_HOTSPOT_LOSS,
-            "), labelled AMP / HOMDEL beyond ", CNV_AMP_THRESHOLD, " / ", CNV_HOMDEL_THRESHOLD,
-            ", and all high-confidence focal amplifications and homozygous deletions in Cancer Gene Census genes.The stem cell hotspot column lists known iPSC hotspots hit by each alteration ",
+            "Autosomal segments with a gain (log2 ≥ ", CNV_HOTSPOT_GAIN, "), loss (log2 ≤ ", CNV_HOTSPOT_LOSS,
+            "), amplifications (AMP, log2 ≥ ", CNV_AMP_THRESHOLD, ") and homozygous deletions (HOMDEL, log2 < ", CNV_HOMDEL_THRESHOLD, "and ", CNV_HOMDEL_MIN_DIFF, "below the background segment). The stem cell hotspot column lists known iPSC hotspots (doi: 10.64898/2025.12.01.691615) hit by each alteration, which are highlighted in green in the plot. Cancer gene census genes are labeled in black.",
             "Coordinates are ", tags$code("hg19"), " for 450K / EPICv1 and ",
             tags$code("hg38"), " for EPICv2."
           ),
@@ -2673,9 +2333,80 @@ server <- function(input, output, session) {
     )
   })
   
+  # ── IDAT input check ───────────────────────────────────────────────────────
+  # The sample must be supplied as exactly two IDAT files: one *_Red.idat and
+  # one *_Grn.idat with the same prefix (or one of the built-in examples).
+  # Returns NULL when the input is fine, otherwise a message for the user.
+  idat_input_problem <- function() {
+    if (isTRUE(input$use_example) && !is.null(input$example_sample) &&
+        nzchar(input$example_sample)) {
+      return(NULL)                       # example import: the pair is fixed
+    }
+    f <- input$idat_files
+    if (is.null(f) || nrow(f) == 0) {
+      return(if (isTRUE(input$use_example)) {
+        paste0("No example sample is selected and no IDAT files are uploaded. ",
+               "Choose an example sample, or untick the example option and upload ",
+               "exactly two IDAT files: one *_Red.idat and one *_Grn.idat.")
+      } else {
+        paste0("No IDAT files are uploaded. Upload exactly two IDAT files: ",
+               "one *_Red.idat and one *_Grn.idat from the same sample.")
+      })
+    }
+    nm <- f$name
+    shown <- paste(nm, collapse = ", ")
+    if (nrow(f) != 2) {
+      return(sprintf(
+        paste0("%d file%s uploaded (%s). Exactly two IDAT files are required: ",
+               "one *_Red.idat and one *_Grn.idat from the same sample."),
+        nrow(f), if (nrow(f) == 1) " was" else "s were", shown))
+    }
+    not_idat <- nm[!grepl("\\.idat$", nm, ignore.case = TRUE)]
+    if (length(not_idat)) {
+      return(sprintf(
+        "Only .idat files can be used, but this is not one: %s. Upload the sample's *_Red.idat and *_Grn.idat files (not compressed or renamed copies).",
+        paste(not_idat, collapse = ", ")))
+    }
+    n_red <- sum(grepl("_Red\\.idat$", nm, ignore.case = TRUE))
+    n_grn <- sum(grepl("_Grn\\.idat$", nm, ignore.case = TRUE))
+    if (n_red != 1 || n_grn != 1) {
+      return(sprintf(
+        paste0("The two files must be one *_Red.idat and one *_Grn.idat, but you ",
+               "uploaded: %s (%d Red, %d Grn). Both files of a sample are needed, ",
+               "e.g. 206687210042_R03C01_Red.idat and 206687210042_R03C01_Grn.idat."),
+        shown, n_red, n_grn))
+    }
+    prefix <- sub("_(Red|Grn)\\.idat$", "", nm, ignore.case = TRUE)
+    if (prefix[1] != prefix[2]) {
+      return(sprintf(
+        paste0("The Red and Green files do not belong to the same sample (%s). ",
+               "Their names must be identical apart from _Red / _Grn."),
+        shown))
+    }
+    NULL
+  }
+  
+  # Show the problem as an error notification when an analysis is started, and
+  # clear it as soon as the input changes.
+  observeEvent(list(input$load_samples, input$classify, input$run_cnv), {
+    msg <- idat_input_problem()
+    if (is.null(msg)) {
+      removeNotification("idat_error")
+    } else {
+      showNotification(msg, type = "error", duration = NULL, id = "idat_error")
+    }
+  }, ignoreInit = TRUE)
+  
+  observeEvent(list(input$idat_files, input$use_example, input$example_sample), {
+    removeNotification("idat_error")
+  }, ignoreInit = TRUE)
+  
   # ── Shared raw-IDAT reactive used by classification and CNV profiling ─────
   sample_files <- reactive({
     req(input$sample_accession, input$array_version)
+    
+    problem <- idat_input_problem()
+    if (!is.null(problem)) validate(need(FALSE, problem))
     
     session_dir <- file.path(tempdir(), paste0("stemclass_", session$token))
     dir.create(session_dir, recursive = TRUE, showWarnings = FALSE)
@@ -2683,15 +2414,22 @@ server <- function(input, output, session) {
     if (isTRUE(input$use_example) && input$example_sample != "") {
       ex <- selected_example()
       req(ex)
-      paths <- download_example_idats(ex)
+      paths <- tryCatch(download_example_idats(ex), error = function(e) e)
+      ex_files <- if (inherits(paths, "error")) character() else c(paths$grn, paths$red)
+      if (length(ex_files) != 2 || !all(file.exists(ex_files)) ||
+          any(file.size(ex_files) == 0)) {
+        msg <- paste0(
+          "The example IDAT files for ", ex$accession, " could not be imported",
+          if (inherits(paths, "error")) paste0(" (", conditionMessage(paths), ")") else
+            " (the files are missing or empty)",
+          ". Check the connection or the data directory and select the example again.")
+        showNotification(msg, type = "error", duration = NULL, id = "idat_error")
+        validate(need(FALSE, msg))
+      }
       source_paths <- c(paths$grn, paths$red)
       dest_names <- basename(source_paths)
     } else {
       req(input$idat_files)
-      validate(
-        need(nrow(input$idat_files) == 2,
-             "Please upload exactly two IDAT files (one Red and one Grn).")
-      )
       source_paths <- input$idat_files$datapath
       dest_names <- input$idat_files$name
     }
@@ -2931,341 +2669,6 @@ server <- function(input, output, session) {
     beta_mat
   })
   
-  
-  # Build the optional RF explainer only when explicitly enabled.
-  rf_explainer <- reactive({
-    req(classification())
-    if (!RF_EXPLANATION_ENABLED) return(NULL)
-    
-    res <- classification()
-    req(res$prepped_rec, training_data())
-    
-    rf_fit <- readRDS(rds_src(urls$model))   # local file or release URL
-    build_tree_interpreter_explainer(
-      rf_fit = rf_fit,
-      train_data = training_data(),
-      prepped_rec = res$prepped_rec
-    )
-  })
-  
-  sample_explanation <- eventReactive(input$run_explanation, {
-    req(
-      classification(), beta_data(), ref_beta(), sample_anno(), ann450K(),
-      input$explanation_class
-    )
-    
-    withProgress(
-      message = paste("Comparing sample with", input$explanation_class),
-      value = 0,
-      {
-        incProgress(0.10, detail = "Identifying classifier CpGs...")
-        class_result <- classification()
-        classifier_cpgs <- class_result$expected_cpgs
-        if (is.null(classifier_cpgs)) classifier_cpgs <- colnames(class_result$test_sample)
-        
-        incProgress(0.35, detail = "Computing reference methylation distributions...")
-        explanation <- compute_reference_deviation(
-          test_beta = beta_data(),
-          ref_beta = ref_beta(),
-          sample_anno = sample_anno(),
-          ann450K = ann450K(),
-          reference_class = input$explanation_class,
-          classifier_cpgs = classifier_cpgs
-        )
-        
-        tbl <- explanation$table
-        
-        if (isTRUE(input$include_rf_explanation)) {
-          incProgress(0.25, detail = "Computing RF feature contributions...")
-          
-          if (!RF_EXPLANATION_ENABLED) {
-            showNotification(
-              paste(
-                "RF feature attribution is currently disabled.",
-                "Reference deviation results will still be shown."
-              ),
-              type = "warning", duration = 8
-            )
-          } else {
-            rf_tbl <- tryCatch(
-              extract_rf_contributions(
-                explainer = rf_explainer(),
-                baked_sample = class_result$test_sample,
-                reference_class = input$explanation_class
-              ),
-              error = function(e) {
-                showNotification(
-                  paste("RF contribution analysis failed:", conditionMessage(e)),
-                  type = "warning", duration = NULL
-                )
-                NULL
-              }
-            )
-            
-            if (!is.null(rf_tbl)) {
-              tbl <- tbl %>% dplyr::left_join(rf_tbl, by = "CpG")
-            }
-          }
-        }
-        
-        if ("RF_Contribution" %in% names(tbl)) {
-          tbl <- tbl %>%
-            dplyr::mutate(Explanation_Priority = Abs_Robust_Z * abs(RF_Contribution))
-        } else {
-          tbl$RF_Contribution <- NA_real_
-          tbl$RF_Direction <- NA_character_
-          tbl$Explanation_Priority <- NA_real_
-        }
-        
-        incProgress(0.20, detail = "Summarising genes...")
-        genes <- summarise_deviation_by_gene(tbl)
-        
-        if (any(is.finite(tbl$RF_Contribution))) {
-          rf_gene <- tbl %>%
-            dplyr::filter(!is.na(UCSC_RefGene_Name), UCSC_RefGene_Name != "") %>%
-            dplyr::mutate(Gene = UCSC_RefGene_Name) %>%
-            tidyr::separate_rows(Gene, sep = ";") %>%
-            dplyr::mutate(Gene = stringr::str_trim(Gene)) %>%
-            dplyr::filter(Gene != "") %>%
-            dplyr::group_by(Gene) %>%
-            dplyr::summarise(
-              RF_Contribution_Sum = sum(RF_Contribution, na.rm = TRUE),
-              Max_Explanation_Priority = max(Explanation_Priority, na.rm = TRUE),
-              .groups = "drop"
-            )
-          genes <- genes %>% dplyr::left_join(rf_gene, by = "Gene")
-        }
-        
-        explanation$table <- tbl
-        explanation$genes <- genes
-        incProgress(0.10, detail = "Done.")
-        explanation
-      }
-    )
-  })
-  
-  output$explanation_summary <- renderUI({
-    req(input$run_explanation > 0, sample_explanation(), classification())
-    ex <- sample_explanation()
-    class_name <- ex$reference_class
-    cal_probability <- classification()$probabilities[[class_name]]
-    
-    percentile_text <- if (is.finite(ex$deviation_percentile)) {
-      paste0(round(ex$deviation_percentile, 1), "th percentile")
-    } else {
-      "Not available"
-    }
-    
-    div(
-      class = "well",
-      style = "padding:20px; background:#f8f9fa;",
-      fluidRow(
-        column(3, tags$b("Reference class"),
-               tags$div(style = "font-size:22px; margin-top:6px;", class_name)),
-        column(3, tags$b("Calibrated probability"),
-               tags$div(style = "font-size:22px; margin-top:6px;",
-                        sprintf("%.3f", as.numeric(cal_probability)))),
-        column(3, tags$b("Percentile within cell state"),
-               tags$div(style = "font-size:22px; margin-top:6px;", percentile_text)),
-        column(3, tags$b("Reference samples"),
-               tags$div(style = "font-size:22px; margin-top:6px;", ex$n_reference_samples))
-      ),
-      tags$hr(),
-      tags$p(
-        paste0(
-          "Deviation was evaluated across ", format(ex$n_cpgs, big.mark = ","),
-          " measured classifier CpGs. "
-        ),
-        if (is.finite(ex$deviation_percentile)) {
-          paste0(
-            "The uploaded sample has a larger median standardized methylation deviation than approximately ",
-            round(ex$deviation_percentile, 1), "% of samples in the ",
-            class_name, " reference cohort."
-          )
-        }
-      ),
-      tags$p(
-        style = "font-size:0.9em; color:#666;",
-        "The calibrated probability and methylation-deviation score are different quantities. ",
-        "RF contributions, when enabled, explain the underlying random forest and not the calibrated probability."
-      )
-    )
-  })
-  
-  output$explanation_cpg_plot <- renderPlot({
-    req(sample_explanation())
-    ex <- sample_explanation()
-    dat <- rank_explanation_cpgs(
-      explanation_table = ex$table,
-      ranking = input$explanation_ranking,
-      top_n = input$explanation_top_n
-    )
-    validate(need(nrow(dat) > 0, "No finite CpG deviations are available for plotting."))
-    
-    dat <- dat %>%
-      dplyr::mutate(
-        Label = dplyr::if_else(
-          !is.na(UCSC_RefGene_Name) & UCSC_RefGene_Name != "",
-          paste0(CpG, " (", UCSC_RefGene_Name, ")"),
-          CpG
-        )
-      )
-    
-    ggplot(dat, aes(x = reorder(Label, Robust_Z), y = Robust_Z, fill = Robust_Z > 0)) +
-      geom_col(width = 0.7) +
-      geom_hline(yintercept = 0, linewidth = 0.5) +
-      coord_flip() +
-      scale_fill_manual(
-        values = c("TRUE" = "#D55E00", "FALSE" = "#0072B2"),
-        labels = c("TRUE" = "Hyper vs reference", "FALSE" = "Hypo vs reference"),
-        name = NULL
-      ) +
-      labs(
-        title = paste("Methylation deviations from", ex$reference_class),
-        subtitle = "Robust Z = (sample beta - reference median beta) / reference MAD",
-        x = NULL, y = "Robust Z"
-      ) +
-      theme_minimal(base_size = 13) +
-      theme(
-        plot.title = element_text(face = "bold", hjust = 0.5),
-        plot.subtitle = element_text(hjust = 0.5),
-        axis.text.y = element_text(size = 9)
-      )
-  })
-  
-  output$explanation_cpg_table <- DT::renderDT({
-    req(sample_explanation())
-    dat <- sample_explanation()$table %>%
-      dplyr::arrange(dplyr::desc(Abs_Robust_Z)) %>%
-      dplyr::select(dplyr::any_of(c(
-        "CpG", "UCSC_RefGene_Name", "UCSC_RefGene_Group", "Sample_Beta",
-        "Reference_Median", "Delta_Beta", "Robust_Z", "Reference_Q05",
-        "Reference_Q95", "Outside_90pct", "RF_Contribution", "RF_Direction",
-        "Explanation_Priority", "chr", "pos"
-      )))
-    
-    numeric_cols <- intersect(
-      c("Sample_Beta", "Reference_Median", "Delta_Beta", "Robust_Z",
-        "Reference_Q05", "Reference_Q95", "RF_Contribution", "Explanation_Priority"),
-      names(dat)
-    )
-    
-    dt <- DT::datatable(
-      dat, rownames = FALSE, filter = "top", extensions = "Buttons",
-      options = list(pageLength = 25, scrollX = TRUE, dom = "Bfrtip", buttons = c("copy", "csv"))
-    )
-    if (length(numeric_cols)) dt <- DT::formatRound(dt, columns = numeric_cols, digits = 4)
-    dt
-  })
-  
-  output$explanation_gene_table <- DT::renderDT({
-    req(sample_explanation())
-    genes <- sample_explanation()$genes
-    dt <- DT::datatable(
-      genes, rownames = FALSE, filter = "top",
-      options = list(pageLength = 20, scrollX = TRUE)
-    )
-    numeric_cols <- intersect(
-      c("Median_Abs_Z", "Max_Abs_Z", "Median_Delta_Beta", "Max_Abs_Delta_Beta",
-        "RF_Contribution_Sum", "Max_Explanation_Priority"),
-      names(genes)
-    )
-    if (length(numeric_cols)) dt <- DT::formatRound(dt, columns = numeric_cols, digits = 4)
-    dt
-  })
-  
-  explanation_heatmap_object <- reactive({
-    req(sample_explanation(), beta_data(), ref_beta())
-    ex <- sample_explanation()
-    
-    top_tbl <- rank_explanation_cpgs(
-      explanation_table = ex$table,
-      ranking = input$explanation_ranking,
-      top_n = min(as.integer(input$explanation_top_n), 50L)
-    )
-    
-    selected_cpgs <- top_tbl$CpG
-    selected_cpgs <- intersect(selected_cpgs, rownames(ref_beta()))
-    selected_cpgs <- intersect(selected_cpgs, colnames(beta_data()))
-    validate(need(length(selected_cpgs) > 1L,
-                  "Not enough CpGs are available to build the explanation heatmap."))
-    
-    reference_ids <- intersect(ex$reference_ids, colnames(ref_beta()))
-    ref_mat <- ref_beta()[selected_cpgs, reference_ids, drop = FALSE]
-    
-    test_vec <- beta_data()[1, selected_cpgs, drop = FALSE]
-    test_mat <- t(as.matrix(test_vec))
-    rownames(test_mat) <- selected_cpgs
-    colnames(test_mat) <- input$sample_accession
-    beta_mat <- cbind(ref_mat, test_mat)
-    
-    column_classes <- c(rep(ex$reference_class, ncol(ref_mat)), "Test Sample")
-    col_ha <- ComplexHeatmap::HeatmapAnnotation(
-      Cell_Type = column_classes,
-      col = list(Cell_Type = c(cell_type_cols, `Test Sample` = "#000000"))
-    )
-    
-    anno <- ex$table[match(rownames(beta_mat), ex$table$CpG), ]
-    row_labels <- ifelse(
-      !is.na(anno$UCSC_RefGene_Name) & anno$UCSC_RefGene_Name != "",
-      paste0(anno$CpG, "  ", anno$UCSC_RefGene_Name),
-      anno$CpG
-    )
-    rownames(beta_mat) <- make.unique(row_labels)
-    
-    ComplexHeatmap::Heatmap(
-      beta_mat,
-      name = "Beta Value",
-      top_annotation = col_ha,
-      show_column_names = FALSE,
-      show_row_names = TRUE,
-      cluster_columns = TRUE,
-      cluster_rows = TRUE,
-      row_names_gp = grid::gpar(fontsize = 8),
-      column_title = paste("Uploaded sample vs", ex$reference_class, "reference"),
-      col = heatmap_scale_blues
-    )
-  })
-  
-  output$explanation_heatmap <- renderPlot({
-    ht <- explanation_heatmap_object()
-    req(ht)
-    ComplexHeatmap::draw(
-      ht, heatmap_legend_side = "right", annotation_legend_side = "right"
-    )
-  })
-  
-  output$download_explanation_cpgs <- downloadHandler(
-    filename = function() {
-      paste0(
-        gsub("[^A-Za-z0-9._-]", "_", input$sample_accession),
-        "_vs_", input$explanation_class, "_CpG_deviation.tsv"
-      )
-    },
-    content = function(file) {
-      ex <- sample_explanation()
-      req(ex)
-      utils::write.table(
-        ex$table, file = file, sep = "\t", row.names = FALSE, quote = FALSE, na = ""
-      )
-    }
-  )
-  
-  output$download_explanation_genes <- downloadHandler(
-    filename = function() {
-      paste0(
-        gsub("[^A-Za-z0-9._-]", "_", input$sample_accession),
-        "_vs_", input$explanation_class, "_gene_deviation.tsv"
-      )
-    },
-    content = function(file) {
-      ex <- sample_explanation()
-      req(ex)
-      utils::write.table(
-        ex$genes, file = file, sep = "\t", row.names = FALSE, quote = FALSE, na = ""
-      )
-    }
-  )
   
   classification <- eventReactive(input$classify, {
     req(beta_data(), training_data(), sample_anno())
@@ -3545,7 +2948,7 @@ server <- function(input, output, session) {
       tags$div(
         style = "margin-top:6px;",
         tags$b("Predicted sex: "), res$inferred_sex,
-        tags$span(style = "color:#6c757d; font-size:0.9em;", paste0(" - ", res$sex_note))
+        tags$span(style = "color:#6c757d; font-size:0.9em;")
       )
     )
   })
@@ -3563,7 +2966,7 @@ server <- function(input, output, session) {
     
     if (nrow(dat) == 0) {
       dat <- data.frame(
-        Result = "No copy-number segments beyond the gain/loss cut-offs and no focal calls detected.",
+        Result = "No copy-number alterations detected.",
         stringsAsFactors = FALSE
       )
       return(DT::datatable(dat, rownames = FALSE, options = list(dom = "t")))
@@ -3622,23 +3025,8 @@ server <- function(input, output, session) {
     }
   )
   
-  output$download_cnv_segments <- downloadHandler(
-    filename = function() {
-      paste0(gsub("[^A-Za-z0-9._-]", "_", input$sample_accession), "_CNV_segments.tsv")
-    },
-    content = function(file) {
-      res <- cnv_result()
-      req(res)
-      utils::write.table(
-        res$segments,
-        file = file,
-        sep = "\t",
-        row.names = FALSE,
-        quote = FALSE
-      )
-    }
-  )
-  
+  # Same table as on screen plus the "Hotspot citations" column, which is hidden
+  # on screen to keep the table compact.
   output$download_cnv_focal <- downloadHandler(
     filename = function() {
       paste0(gsub("[^A-Za-z0-9._-]", "_", input$sample_accession), "_CNV_alterations.tsv")
