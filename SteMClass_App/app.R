@@ -1,7 +1,19 @@
+# ==============================================================================
+# DATA SOURCES AND HOSTING
+# ------------------------------------------------------------------------------
+# One app.R for all deployments:
+#  - STEMCLASS_DATA_DIR not set (Posit Connect, local use): model, reference,
+#    example and CNV files are streamed from the GitHub release v1.0-data, and
+#    the Roboto font is loaded from Google Fonts, as before.
+#  - STEMCLASS_DATA_DIR set (self-hosted Docker image at stemclass.charite.de,
+#    /srv/stemclass-data): every file is read from that directory and no web
+#    font is loaded, so the app makes no outbound requests at run time.
+# In both cases reference objects are loaded once per R process (cache).
+# A data file added to the release must also be added to the self-hosted data
+# directory (scripts/fetch_data.sh in the deployment kit).
+# ==============================================================================
 
-
-
-options(shiny.maxRequestSize = 30*1024^2)
+options(shiny.maxRequestSize = 80*1024^2)
 
 library(shinyjs)
 library(thematic)     # For automatic theming of ggplot2 plots
@@ -12,19 +24,64 @@ library(circlize)
 library(dplyr)
 library(tidyr)
 
-# Load the trained model, training means, and CpG annotation table
+# ==== Data sources: local directory (self-hosted) or GitHub release ====
+STEMCLASS_DATA_DIR <- Sys.getenv("STEMCLASS_DATA_DIR", "")
+STEMCLASS_RELEASE_BASE <- "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data"
+STEMCLASS_LOCAL <- nzchar(STEMCLASS_DATA_DIR)
 
-# ==== Streamed file URLs ====
+# Path in STEMCLASS_DATA_DIR if set, otherwise the release URL. `url` overrides
+# the remote location for files that are not part of the release.
+stemclass_src <- function(file, url = paste0(STEMCLASS_RELEASE_BASE, "/", file)) {
+  if (STEMCLASS_LOCAL) file.path(STEMCLASS_DATA_DIR, file) else url
+}
+
+is_remote <- function(x) is.character(x) && length(x) == 1L && grepl("^https?://", x, ignore.case = TRUE)
+
+# Argument for readRDS(): a local path, or a url() connection as upstream uses.
+rds_src <- function(src) if (is_remote(src)) url(src) else src
+
+# load() on either a local path or a URL; returns the environment.
+load_rda_src <- function(src) {
+  env <- new.env(parent = emptyenv())
+  if (is_remote(src)) {
+    con <- url(src, "rb")
+    on.exit(close(con), add = TRUE)
+    load(con, envir = env)
+  } else {
+    load(src, envir = env)
+  }
+  env
+}
+
+# Process-wide cache: each object is loaded once per R process.
+stemclass_cache <- new.env(parent = emptyenv())
+cached <- function(key, expr) {
+  if (!exists(key, envir = stemclass_cache, inherits = FALSE)) {
+    assign(key, expr, envir = stemclass_cache)   # `expr` is evaluated lazily, only here
+  }
+  get(key, envir = stemclass_cache, inherits = FALSE)
+}
+
+# Load the trained model, training means, and CpG annotation table
 urls <- list(
-  model        = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_rf_fit_prob.rds",
-  train_anno   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_targets.txt",
-  marker_data   = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_BIH_marker_data.txt",
-  cpg_anno     = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/CpG_450k_annotation_with_top10k_marker.txt",
-  train_data = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/final_train_data.txt",
-  cal_model = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/calibration_model_deploy.rds",
-  prepped_rec = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/prepped_recipe.rds",
-  train_gmset = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/gmset_train_2025_flt.rda"
+  model        = stemclass_src("final_rf_fit_prob.rds"),
+  train_anno   = stemclass_src("final_train_targets.txt"),
+  marker_data  = stemclass_src("final_BIH_marker_data.txt"),
+  cpg_anno     = stemclass_src("CpG_450k_annotation_with_top10k_marker.txt"),
+  train_data   = stemclass_src("final_train_data.txt"),
+  cal_model    = stemclass_src("calibration_model_deploy.rds"),
+  prepped_rec  = stemclass_src("prepped_recipe.rds"),
+  train_gmset  = stemclass_src("gmset_train_2025_flt.rda")
 )
+
+if (STEMCLASS_LOCAL) {
+  missing_data <- unlist(urls)[!file.exists(unlist(urls))]
+  if (length(missing_data)) {
+    warning("[SteMClass] Missing files in STEMCLASS_DATA_DIR: ",
+            paste(basename(missing_data), collapse = ", "), call. = FALSE)
+  }
+  message("[SteMClass] Reading data from ", STEMCLASS_DATA_DIR)
+}
 
 # 9‐color Blues palette; interpolate to 255
 
@@ -39,70 +96,69 @@ heatmap_scale_blues <- colorRamp2(
 REJECT_LABEL <- "reject"
 
 
-
 example_samples <- list(
   list(
     label         = "iPSC Test Sample (GSM9238338)",
     accession     = "GSM9238338 iPSC",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206687210042_R03C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206687210042_R03C01_Red.idat"
+    grn_url       = stemclass_src("206687210042_R03C01_Grn.idat"),
+    red_url       = stemclass_src("206687210042_R03C01_Red.idat")
   ),
   list(
     label         = "Ectoderm Test Sample (GSM9238401)",
     accession     = "GSM9238401 Ectoderm",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/204964480134_R08C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/204964480134_R08C01_Red.idat"
+    grn_url       = stemclass_src("204964480134_R08C01_Grn.idat"),
+    red_url       = stemclass_src("204964480134_R08C01_Red.idat")
   ),
   list(
     label         = "Endoderm Test Sample (GSM9238413)",
     accession     = "GSM9238413 Endoderm",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R07C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R07C01_Red.idat"
+    grn_url       = stemclass_src("207705780010_R07C01_Grn.idat"),
+    red_url       = stemclass_src("207705780010_R07C01_Red.idat")
   ),
   list(
     label         = "Mesoderm Test Sample (GSM9238472)",
     accession     = "GSM9238472 Mesoderm",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R06C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/207705780010_R06C01_Red.idat"
+    grn_url       = stemclass_src("207705780010_R06C01_Grn.idat"),
+    red_url       = stemclass_src("207705780010_R06C01_Red.idat")
   ),
   list(
     label         = "Endothelial Test Sample (GSM9238440)",
     accession     = "GSM9238440 Endothelial",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206702500016_R07C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/206702500016_R07C01_Red.idat"
+    grn_url       = stemclass_src("206702500016_R07C01_Grn.idat"),
+    red_url       = stemclass_src("206702500016_R07C01_Red.idat")
   ),
   list(
     label         = "Lung Test Sample (GSM9238447)",
     accession     = "GSM9238447 Lung",
     array_version = "EPICv2",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010430001_R03C01_Red.idat"
+    grn_url       = stemclass_src("208010430001_R03C01_Grn.idat"),
+    red_url       = stemclass_src("208010430001_R03C01_Red.idat")
   ),
   list(
     label         = "NSC Test Sample (GSM9238490)",
     accession     = "GSM9238490 NSC",
     array_version = "EPICv1",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/205038940051_R02C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/205038940051_R02C01_Red.idat"
+    grn_url       = stemclass_src("205038940051_R02C01_Grn.idat"),
+    red_url       = stemclass_src("205038940051_R02C01_Red.idat")
   ),
   list(
     label         = "Astrocyte Test Sample (GSM9238374)",
     accession     = "GSM9238374 Astrocyte",
     array_version = "EPICv2",
-    grn_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Grn.idat",
-    red_url       = "https://github.com/pereze5/SteMClass_App/releases/download/v1.0-data/208010440130_R04C01_Red.idat"
+    grn_url       = stemclass_src("208010440130_R04C01_Grn.idat"),
+    red_url       = stemclass_src("208010440130_R04C01_Red.idat")
   )
 )
 
 
 # Named vector for the selectInput choices (name = label, value = accession)
 example_choices <- c(
-  "— select a sample —" = "",
+  "- select a sample -" = "",
   setNames(
     sapply(example_samples, `[[`, "accession"),
     sapply(example_samples, `[[`, "label")
@@ -200,10 +256,7 @@ predict_calibrated_all <- function(
   baked <- recipes::bake(prepped_rec, new_data = X_tbl)
   
   
-  # 4) Load models
-  rf_fit_path  = url(urls$model)
-  cal_path     = url(urls$cal_model)
-  
+  # 4) Load models from the paths/connections supplied by the caller
   rf_bundle  <- readRDS(rf_fit_path)
   cal_deploy <- tryCatch(
     readRDS(cal_path),
@@ -250,15 +303,1514 @@ predict_calibrated_all <- function(
   
   out
 }
+
+# ==============================================================================
+# CNV PROFILING CONFIGURATION + HELPERS
+# ==============================================================================
+# The CNV workflow uses SeSAMe + conumee2 on the original IDAT intensities.
+# Reference/annotation paths can be overridden with environment variables.
+# Defaults below preserve the paths used by the supplied standalone CNV script.
+
+# Self-hosted: local directory (no downloads). Otherwise: the GitHub release.
+CNV_RELEASE_BASE <- if (STEMCLASS_LOCAL) STEMCLASS_DATA_DIR else STEMCLASS_RELEASE_BASE
+
+cnv_config <- list(
+  ensemble_hg19 = paste0(CNV_RELEASE_BASE, "/ensemble_gr.rds"),
+  ensemble_hg38 = paste0(CNV_RELEASE_BASE, "/ensemble_gr_hg38.rds"),
+  cancer_gene_census = paste0(
+    CNV_RELEASE_BASE,
+    "/CancerGeneCensus_allWed_May_4-08_41_12_2022.csv"
+  ),
+  #detailplot_override = paste0(CNV_RELEASE_BASE, "/cnv_detailplot_override.R"),
+  
+  # StemCNV-check curated stem cell aberration hotspots (cytobands + genes),
+  # shown in the detail plot annotation together with the CGC hit genes.
+  stemCNV_hotspots = paste0(CNV_RELEASE_BASE, "/CNV-hotspots.csv"),
+  
+  # UCSC cytoband tables, needed to turn hotspot cytobands (e.g. "20q11.21")
+  # into genomic coordinates for each genome build. For a fully self-contained
+  # app, upload both files to the release and point these URLs there.
+  # Self-hosted: stored as cytoBand_hg19.txt.gz / cytoBand_hg38.txt.gz in
+  # STEMCLASS_DATA_DIR (distinct names; both builds are called cytoBand.txt.gz at UCSC).
+  cytoband_hg19 = stemclass_src(
+    "cytoBand_hg19.txt.gz",
+    url = "https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/cytoBand.txt.gz"
+  ),
+  cytoband_hg38 = stemclass_src(
+    "cytoBand_hg38.txt.gz",
+    url = "https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/cytoBand.txt.gz"
+  ),
+  
+  # conumee2's exclude_regions are hg19 coordinates and are used as shipped for
+  # 450K / EPICv1. For EPICv2 (hg38) the lifted-over copy (ex38) is imported
+  # from this file. Create it once and upload it to the release:
+  #   data("exclude_regions", package = "conumee2")
+  #   chain <- rtracklayer::import.chain("hg19ToHg38.over.chain")
+  #   ex38  <- GenomicRanges::reduce(unlist(rtracklayer::liftOver(exclude_regions, chain)))
+  #   saveRDS(ex38, "exclude_regions_hg38.rds")
+  # A local file path also works here instead of a URL.
+  exclude_regions_hg38 = paste0(CNV_RELEASE_BASE, "/exclude_regions_hg38.rds"),
+  
+  # Existing sex-separated conumee references in the release. For each array
+  # the female and male references are pooled at run time into ONE mixed-sex
+  # reference: sex does not affect autosomal copy number, so pooling maximises
+  # the number of controls. chrX/chrY are not analysed.
+  ref_450k_female   = paste0(CNV_RELEASE_BASE, "/ref450K_female_Conumee.rds"),
+  ref_450k_male     = paste0(CNV_RELEASE_BASE, "/ref450K_male_Conumee.rds"),
+  ref_epicv1_female = paste0(CNV_RELEASE_BASE, "/refEPIC_female_Conumee.rds"),
+  ref_epicv1_male   = paste0(CNV_RELEASE_BASE, "/refEPIC_male_Conumee.rds"),
+  ref_epicv2_female = paste0(CNV_RELEASE_BASE, "/refEPICv2_female_Conumee.rds"),
+  ref_epicv2_male   = paste0(CNV_RELEASE_BASE, "/refEPICv2_male_Conumee.rds")
+)
+
+# All CNV analysis uses SeSAMe with the QCDPB preprocessing string, matching the
+# release references:
+#   Q = quality masking, C = Infinium-I channel inference, D = non-linear dye-bias
+#   correction, P = pOOBAH detection masking, B = noob background subtraction.
+# Masked probes (Q, P) return NA total intensity and are dropped from the fit.
+CNV_SESAME_PREP <- "QCDPB"
+
+# Fixed CNV reference sex (no user selection).
+CNV_REFERENCE_SEX <- "mixed"
+
+cnv_reference_label <- function(platform) paste("Mixed-sex", platform, "reference")
+
+# Autosomes only: against a mixed-sex reference chrX/chrY ratios are not
+# interpretable, so they are excluded from fitting, segmentation and plots.
+CNV_PLOT_CHRS <- paste0("chr", 1:22)
+
+# Focal CNV call thresholds (focal log2 ratio).
+CNV_AMP_THRESHOLD    <- 0.6     # focal >= this -> AMP
+CNV_HOMDEL_THRESHOLD <- -0.64   # focal <  this -> HOMDEL
+CNV_HOMDEL_MIN_DIFF  <- 0.3     # ...and focal must also lie at least this far below the
+#    background (focal - background <= -this); otherwise the
+#    gene is not called and the loss stays on its segment only
+
+# Segment states (same cut-offs as GAIN / LOSS in the focal-call logic). Every
+# autosomal segment beyond these is reported in the alterations table; a
+# StemCNV-check hotspot is "hit" when such a segment overlaps it in the curated
+# direction, or when a high-confidence focal call overlaps it.
+CNV_HOTSPOT_GAIN <- 0.15    # segment mean >= this -> GAIN (AMP only via the gene-vs-background call)
+CNV_HOTSPOT_LOSS <- -0.17   # segment mean <= this -> LOSS (HOMDEL only via the gene-vs-background call)
+
+# Probe-coverage filter. Alterations resting on too few array probes are not
+# reported at all (not in the table, hotspot hits or plot labels; the segments
+# download still lists every segment). Coverage is the number of probes retained
+# in the CNV annotation (after reference / sample probe matching) that fall inside
+#  - the segment                          -> CNV_MIN_SEGMENT_PROBES
+#  - the gene of an AMP / HOMDEL call     -> CNV_MIN_GENE_PROBES
+# Bins hold >= 15 probes each, so 150 probes is roughly the minimum of 10 bins.
+# Regions whose probes cannot be counted are kept.
+CNV_MIN_SEGMENT_PROBES <- 150
+CNV_MIN_GENE_PROBES    <- 10
+
+# Sex is always predicted with sesame::inferSex() on the same QCDPB-processed
+# data used for CNV (no other tool is used). If it fails the run stops with an
+# explanatory error message.
+
+# Genome-plot colour scale (identical to the standalone script).
+# y-range of the genome plot: the profile uses +/-1.25 (conumee default); the
+# extra space holds the non-overlapping label rows.
+CNV_PLOT_YLIM <- c(-2.1, 2.1)
+
+CNV_PLOT_COLS <- c(
+  "#39379F", "#39379F", "#39379F", "#39379F",
+  "#ECF0F1",
+  "#E17E49", "#E17E49", "#E17E49", "#E17E49"
+)
+
+# Cache remote CNV assets once per R process.
+cnv_asset_cache_dir <- file.path(tempdir(), "stemclass_cnv_assets")
+dir.create(cnv_asset_cache_dir, recursive = TRUE, showWarnings = FALSE)
+
+cnv_is_url <- function(x) {
+  is.character(x) &&
+    length(x) == 1L &&
+    nzchar(x) &&
+    grepl("^https?://", x, ignore.case = TRUE)
+}
+
+# Cache file name for a URL. Built from the whole URL path (not only the file
+# name), so different URLs with the same file name (e.g. the hg19 and hg38
+# cytoBand.txt.gz) are cached separately.
+cnv_cache_name <- function(path_or_url) {
+  url_no_query <- sub("\\?.*$", "", path_or_url)
+  path_part <- sub("^https?://[^/]+/", "", url_no_query, ignore.case = TRUE)
+  name <- gsub("[^A-Za-z0-9._-]+", "_", path_part)
+  if (!nzchar(name)) name <- paste0("cnv_asset_", abs(sum(utf8ToInt(path_or_url))))
+  name
+}
+
+cnv_materialize_asset <- function(path_or_url, label = "CNV asset") {
+  if (!is.character(path_or_url) || length(path_or_url) != 1L || !nzchar(path_or_url)) {
+    stop(label, " is not configured.", call. = FALSE)
+  }
+  
+  if (!cnv_is_url(path_or_url)) {
+    if (!file.exists(path_or_url)) {
+      stop(label, " was not found: ", path_or_url, call. = FALSE)
+    }
+    return(path_or_url)
+  }
+  
+  filename <- cnv_cache_name(path_or_url)
+  dest <- file.path(cnv_asset_cache_dir, filename)
+  
+  if (!file.exists(dest) || is.na(file.info(dest)$size) || file.info(dest)$size == 0) {
+    tmp <- paste0(dest, ".part")
+    if (file.exists(tmp)) unlink(tmp)
+    
+    message("Downloading ", label, ": ", filename)
+    
+    status <- tryCatch(
+      utils::download.file(
+        url = path_or_url,
+        destfile = tmp,
+        mode = "wb",
+        quiet = TRUE
+      ),
+      error = function(e) e
+    )
+    
+    if (inherits(status, "error") || !file.exists(tmp) ||
+        is.na(file.info(tmp)$size) || file.info(tmp)$size == 0) {
+      if (file.exists(tmp)) unlink(tmp)
+      msg <- if (inherits(status, "error")) conditionMessage(status) else "empty download"
+      stop("Failed to download ", label, " from ", path_or_url, ": ", msg, call. = FALSE)
+    }
+    
+    if (!file.rename(tmp, dest)) {
+      ok <- file.copy(tmp, dest, overwrite = TRUE)
+      unlink(tmp)
+      if (!ok) stop("Could not cache ", label, " at ", dest, call. = FALSE)
+    }
+  }
+  
+  dest
+}
+
+# Source the custom conumee detail-plot override (local data directory when
+# self-hosted, otherwise the GitHub release). A failure is logged.
+#tryCatch({
+#  cnv_detailplot_file <- cnv_materialize_asset(
+#    cnv_config$detailplot_override,
+#    "CNV detail-plot override"
+#  )
+#  source(cnv_detailplot_file, local = FALSE)
+#}, error = function(e) {
+#  message("[CNV] Detail-plot override not loaded: ", conditionMessage(e))
+#})
+
+cnv_require_packages <- function() {
+  required <- c(
+    "sesame", "sesameData", "minfi", "conumee2", "GenomicRanges", "IRanges",
+    "S4Vectors", "GenomeInfoDb", "DT"
+  )
+  missing <- required[!vapply(required, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(missing) > 0) {
+    stop(
+      "CNV profiling requires these packages: ",
+      paste(missing, collapse = ", "),
+      call. = FALSE
+    )
+  }
+}
+
+# Array-specific analysis on each platform's own probe set.
+cnv_platform_config <- function(platform) {
+  switch(
+    platform,
+    "450K"   = list(sesame = "HM450",  conumee = "450k",   genome = "hg19", use_exclude_regions = TRUE,  source_label = "450K"),
+    "EPICv1" = list(sesame = "EPIC",   conumee = "EPIC",   genome = "hg19", use_exclude_regions = TRUE,  source_label = "EPICv1"),
+    "EPICv2" = list(sesame = "EPICv2", conumee = "EPICv2", genome = "hg38", use_exclude_regions = TRUE,  source_label = "EPICv2"),
+    stop("Unsupported CNV platform: ", platform, call. = FALSE)
+  )
+}
+
+prepare_ensembl_gr <- function(ensembl_gr) {
+  mcols_names <- colnames(S4Vectors::mcols(ensembl_gr))
+  gene_col <- dplyr::case_when(
+    "name"          %in% mcols_names ~ "name",
+    "gene"          %in% mcols_names ~ "gene",
+    "gene_name"     %in% mcols_names ~ "gene_name",
+    "symbol"        %in% mcols_names ~ "symbol",
+    "external_name" %in% mcols_names ~ "external_name",
+    TRUE ~ NA_character_
+  )
+  if (is.na(gene_col)) {
+    stop(
+      "Could not find a gene-symbol column in the Ensembl GRanges. Available mcols: ",
+      paste(mcols_names, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  S4Vectors::mcols(ensembl_gr)$name <- as.character(
+    S4Vectors::mcols(ensembl_gr)[[gene_col]]
+  )
+  ensembl_gr
+}
+
+make_cgc_detail_regions <- function(ensembl_gr, cancer_gene_census, ref_genome) {
+  ensembl_gr <- prepare_ensembl_gr(ensembl_gr)
+  cgc_symbols <- unique(as.character(cancer_gene_census$Gene.Symbol))
+  cgc_symbols <- setdiff(cgc_symbols, c("CDKN2A", "CDKN2B"))
+  
+  cgc_gr <- ensembl_gr[
+    S4Vectors::mcols(ensembl_gr)$name %in% cgc_symbols
+  ]
+  
+  if (identical(ref_genome, "hg19")) {
+    cdkn2ab_range <- GenomicRanges::GRanges(
+      seqnames = "chr9",
+      ranges = IRanges::IRanges(start = 21967751, end = 22009304),
+      strand = "*"
+    )
+  } else {
+    cdkn2ab_range <- GenomicRanges::GRanges(
+      seqnames = "chr9",
+      ranges = IRanges::IRanges(start = 21967752, end = 21995301),
+      strand = "*"
+    )
+  }
+  
+  S4Vectors::mcols(cdkn2ab_range)$name <- "CDKN2A/B"
+  detail_gr <- c(cgc_gr, cdkn2ab_range)
+  detail_gr <- GenomeInfoDb::keepStandardChromosomes(detail_gr, pruning.mode = "coarse")
+  GenomeInfoDb::seqlevelsStyle(detail_gr) <- "UCSC"
+  detail_gr[
+    as.character(GenomicRanges::seqnames(detail_gr)) %in% paste0("chr", 1:22)
+  ]
+}
+
+strip_conumee_sample_prefix <- function(df) {
+  wanted_suffixes <- c(
+    "ID", "chrom", "loc.start", "loc.end", "num.mark", "bstat", "pval",
+    "seg.mean", "seg.median", "Chromosome", "Start", "End", "Name", "Value"
+  )
+  # Escape dots so "seg.mean" etc. match literally.
+  suffix_pattern <- paste(gsub(".", "\\.", wanted_suffixes, fixed = TRUE), collapse = "|")
+  # conumee prefixes columns with the sample name, e.g. "X2066..._R03C01.seg.mean"
+  # or "GSM9238338 iPSC.seg.mean". Strip ANY prefix (spaces/dots allowed) that
+  # precedes a known suffix; unprefixed names such as "seg.mean" are untouched.
+  names(df) <- sub(
+    paste0("^.+?\\.(", suffix_pattern, ")$"),
+    "\\1",
+    names(df)
+  )
+  df
+}
+
+cnv_reference_cache <- new.env(parent = emptyenv())
+cnv_resource_cache  <- new.env(parent = emptyenv())
+
+# ---- Progress helpers --------------------------------------------------------
+# `progress` is a callback function(value, detail) where value is the absolute
+# fraction complete (0-1). The default does nothing so the CNV functions also
+# work outside Shiny.
+cnv_no_progress <- function(value, detail) invisible(NULL)
+
+# TRUE when an asset is local or already downloaded into the session cache.
+cnv_asset_is_cached <- function(path_or_url) {
+  if (!cnv_is_url(path_or_url)) return(TRUE)
+  dest <- file.path(cnv_asset_cache_dir, cnv_cache_name(path_or_url))
+  file.exists(dest) && isTRUE(file.info(dest)$size > 0)
+}
+
+# Report "Downloading ..." or "Loading ... (cached)" and then fetch the asset.
+cnv_fetch_with_progress <- function(path_or_url, label, progress, value) {
+  fname <- basename(sub("\\?.*$", "", path_or_url))
+  detail <- if (!cnv_is_url(path_or_url)) {
+    paste0("Loading ", label, ": ", fname)
+  } else if (cnv_asset_is_cached(path_or_url)) {
+    paste0("Loading ", label, " (cached): ", fname)
+  } else {
+    paste0("Downloading ", label, " (first run only): ", fname)
+  }
+  progress(value, detail)
+  cnv_materialize_asset(path_or_url, label)
+}
+
+cnv_load_resources <- function(platform, progress = cnv_no_progress) {
+  cfg <- cnv_platform_config(platform)
+  key <- cfg$genome
+  if (exists(key, envir = cnv_resource_cache, inherits = FALSE)) {
+    progress(0.20, paste0("Gene annotation (", cfg$genome, ") already loaded"))
+    return(get(key, envir = cnv_resource_cache, inherits = FALSE))
+  }
+  
+  ensembl_src <- if (cfg$genome == "hg19") cnv_config$ensemble_hg19 else cnv_config$ensemble_hg38
+  
+  # Download (or locate) the annotation files; errors clearly if unavailable.
+  ensembl_path <- cnv_fetch_with_progress(
+    ensembl_src, paste0("Ensembl gene annotation (", cfg$genome, ")"), progress, 0.08
+  )
+  cgc_path <- cnv_fetch_with_progress(
+    cnv_config$cancer_gene_census, "Cancer Gene Census table", progress, 0.14
+  )
+  
+  hotspot_path <- cnv_fetch_with_progress(
+    cnv_config$stemCNV_hotspots, "StemCNV-check hotspot list", progress, 0.15
+  )
+  cytoband_path <- cnv_fetch_with_progress(
+    if (cfg$genome == "hg19") cnv_config$cytoband_hg19 else cnv_config$cytoband_hg38,
+    paste0("UCSC cytoband table (", cfg$genome, ")"), progress, 0.16
+  )
+  
+  out <- list(
+    ensembl = readRDS(ensembl_path),
+    cgc = read.csv(cgc_path, stringsAsFactors = FALSE),
+    genome = cfg$genome
+  )
+  out$cytobands <- read_ucsc_cytobands(cytoband_path)
+  out$exclude_regions <- cnv_load_exclude_regions(cfg$genome, progress)
+  out$hotspots <- make_stemcnv_hotspot_regions(
+    hotspots = utils::read.csv(hotspot_path, stringsAsFactors = FALSE, check.names = FALSE),
+    cytobands = out$cytobands,
+    ensembl_gr = out$ensembl,
+    genome = cfg$genome
+  )
+  assign(key, out, envir = cnv_resource_cache)
+  out
+}
+
+# ---- Exclusion regions ------------------------------------------------------------
+# hg19 (450K / EPICv1): conumee2's built-in exclude_regions.
+# hg38 (EPICv2): the imported ex38 GRanges (exclude_regions lifted to hg38).
+# If the hg38 file cannot be loaded, EPICv2 runs without exclusions and says so.
+cnv_load_exclude_regions <- function(genome, progress = cnv_no_progress) {
+  if (identical(genome, "hg19")) {
+    env <- new.env(parent = emptyenv())
+    utils::data("exclude_regions", package = "conumee2", envir = env)
+    if (!exists("exclude_regions", envir = env, inherits = FALSE)) return(NULL)
+    return(get("exclude_regions", envir = env, inherits = FALSE))
+  }
+  
+  ex38 <- tryCatch({
+    path <- cnv_fetch_with_progress(
+      cnv_config$exclude_regions_hg38, "hg38 exclusion regions (ex38)", progress, 0.17
+    )
+    readRDS(path)
+  }, error = function(e) {
+    warning("[CNV] hg38 exclusion regions not loaded (", conditionMessage(e),
+            "); EPICv2 will be analysed without exclusion regions.", call. = FALSE)
+    NULL
+  })
+  if (is.null(ex38)) return(NULL)
+  if (!methods::is(ex38, "GRanges")) {
+    warning("[CNV] exclude_regions_hg38.rds is not a GRanges object; it is ignored.", call. = FALSE)
+    return(NULL)
+  }
+  GenomeInfoDb::seqlevelsStyle(ex38) <- "UCSC"   # match conumee's "chr1" naming
+  message(sprintf("[CNV] hg38 exclusion regions loaded: %d regions (%.2f Mb)",
+                  length(ex38), sum(as.numeric(GenomicRanges::width(ex38))) / 1e6))
+  ex38
+}
+
+# ---- StemCNV-check hotspot formatting ------------------------------------------
+# UCSC cytoBand.txt(.gz): chrom, chromStart (0-based), chromEnd, band name, stain.
+read_ucsc_cytobands <- function(path) {
+  cb <- utils::read.delim(path, header = FALSE, stringsAsFactors = FALSE,
+                          col.names = c("chrom", "start", "end", "band", "stain"))
+  cb$start <- cb$start + 1L                     # to 1-based, as GRanges
+  cb$arm_band <- paste0(sub("^chr", "", cb$chrom), cb$band)   # e.g. "20q11.21"
+  cb
+}
+
+# Cytobands covered by a hotspot label. Coarse labels include all sub-bands:
+#   "1q25"    -> q25.1, q25.2, q25.3
+#   "20q11.2" -> q11.21, q11.22, q11.23
+#   "20q11.21"-> q11.21 only
+cytoband_rows_for <- function(label, cytobands) {
+  exact  <- cytobands$arm_band == label
+  child  <- startsWith(cytobands$arm_band, paste0(label, "."))
+  deeper <- grepl("\\.", label) & startsWith(cytobands$arm_band, label) &
+    grepl("^[0-9]", substring(cytobands$arm_band, nchar(label) + 1))
+  which(exact | child | deeper)
+}
+
+# Turn the curated CSV into one GRanges region per hotspot (genome-specific):
+#   1. collapse duplicate rows (one row per citation) to one row per hotspot,
+#      keeping call type(s), max check score and the list of citations;
+#   2. map "gband" hotspots to cytoband coordinates, "gene_name" hotspots to
+#      Ensembl gene coordinates;
+#   3. keep autosomes only (chrX/chrY are not analysed) and UCSC naming.
+make_stemcnv_hotspot_regions <- function(hotspots, cytobands, ensembl_gr, genome) {
+  req_cols <- c("hotspot", "mapping", "call_type", "check_score", "citation")
+  miss <- setdiff(req_cols, names(hotspots))
+  if (length(miss)) {
+    warning("[CNV] Hotspot list is missing columns: ", paste(miss, collapse = ", "), call. = FALSE)
+    return(GenomicRanges::GRanges())
+  }
+  
+  hs <- hotspots
+  hs$hotspot <- trimws(hs$hotspot)
+  hs <- hs[nzchar(hs$hotspot), , drop = FALSE]
+  
+  # 1. one row per hotspot
+  keys <- unique(hs[, c("hotspot", "mapping")])
+  collapsed <- do.call(rbind, lapply(seq_len(nrow(keys)), function(i) {
+    d <- hs[hs$hotspot == keys$hotspot[i] & hs$mapping == keys$mapping[i], , drop = FALSE]
+    data.frame(
+      hotspot     = keys$hotspot[i],
+      mapping     = keys$mapping[i],
+      call_type   = paste(sort(unique(d$call_type)), collapse = "/"),
+      check_score = suppressWarnings(max(as.numeric(d$check_score), na.rm = TRUE)),
+      citations   = paste(unique(d$citation), collapse = "; "),
+      stringsAsFactors = FALSE
+    )
+  }))
+  
+  # 2a. cytoband hotspots
+  gb <- collapsed[collapsed$mapping == "gband", , drop = FALSE]
+  gb_gr <- lapply(seq_len(nrow(gb)), function(i) {
+    rows <- cytoband_rows_for(gb$hotspot[i], cytobands)
+    if (!length(rows)) return(NULL)
+    chr <- unique(cytobands$chrom[rows])
+    if (length(chr) != 1) return(NULL)
+    GenomicRanges::GRanges(chr, IRanges::IRanges(min(cytobands$start[rows]), max(cytobands$end[rows])))
+  })
+  gb_ok <- !vapply(gb_gr, is.null, logical(1))
+  
+  # 2b. gene hotspots
+  ens <- prepare_ensembl_gr(ensembl_gr)
+  ens <- GenomeInfoDb::keepStandardChromosomes(ens, pruning.mode = "coarse")
+  GenomeInfoDb::seqlevelsStyle(ens) <- "UCSC"
+  gn <- collapsed[collapsed$mapping == "gene_name", , drop = FALSE]
+  gn_gr <- lapply(gn$hotspot, function(g) {
+    hit <- ens[S4Vectors::mcols(ens)$name == g]
+    if (!length(hit)) return(NULL)
+    hit <- hit[as.character(GenomicRanges::seqnames(hit)) == as.character(GenomicRanges::seqnames(hit))[1]]
+    GenomicRanges::GRanges(as.character(GenomicRanges::seqnames(hit))[1],
+                           IRanges::IRanges(min(GenomicRanges::start(hit)), max(GenomicRanges::end(hit))))
+  })
+  gn_ok <- !vapply(gn_gr, is.null, logical(1))
+  
+  unmapped <- c(gb$hotspot[!gb_ok], gn$hotspot[!gn_ok])
+  if (length(unmapped)) {
+    message("[CNV] Hotspots not found in the ", genome, " annotation (skipped): ",
+            paste(unmapped, collapse = ", "))
+  }
+  
+  mapped_rows <- rbind(gb[gb_ok, , drop = FALSE], gn[gn_ok, , drop = FALSE])
+  if (!nrow(mapped_rows)) return(GenomicRanges::GRanges())
+  gr <- suppressWarnings(do.call(c, c(gb_gr[gb_ok], gn_gr[gn_ok])))
+  S4Vectors::mcols(gr) <- S4DataFrame_from(mapped_rows)
+  S4Vectors::mcols(gr)$name <- mapped_rows$hotspot
+  
+  # 3. autosomes only
+  gr <- gr[as.character(GenomicRanges::seqnames(gr)) %in% paste0("chr", 1:22)]
+  message(sprintf("[CNV] StemCNV-check hotspots mapped to %s: %d regions (%d cytobands, %d genes)",
+                  genome, length(gr), sum(S4Vectors::mcols(gr)$mapping == "gband"),
+                  sum(S4Vectors::mcols(gr)$mapping == "gene_name")))
+  gr
+}
+
+# Hotspots hit in this sample. Returns the hotspot GRanges subset with an
+# added "evidence" column, e.g. "segment gain (0.27)" or "focal call: KRAS AMP".
+find_hotspot_hits <- function(hotspots, segments, focal_regions = NULL) {
+  if (!length(hotspots)) return(hotspots)
+  ct <- S4Vectors::mcols(hotspots)$call_type
+  want_gain <- grepl("gain", ct)
+  want_loss <- grepl("loss", ct)
+  evidence <- rep(NA_character_, length(hotspots))
+  hit_state <- rep(NA_character_, length(hotspots))
+  hit_value <- rep(NA_real_, length(hotspots))
+  
+  # 1. Segments overlapping the hotspot, in the curated direction.
+  seg <- segments[is.finite(as.numeric(segments$seg.mean)), , drop = FALSE]
+  if (nrow(seg)) {
+    seg_gr <- GenomicRanges::GRanges(
+      as.character(seg$chrom),
+      IRanges::IRanges(as.integer(seg$loc.start), as.integer(seg$loc.end)),
+      seg.mean = as.numeric(seg$seg.mean)
+    )
+    ov <- GenomicRanges::findOverlaps(hotspots, seg_gr)
+    for (i in unique(S4Vectors::queryHits(ov))) {
+      m <- S4Vectors::mcols(seg_gr)$seg.mean[S4Vectors::subjectHits(ov)[S4Vectors::queryHits(ov) == i]]
+      if (want_gain[i] && any(m >= CNV_HOTSPOT_GAIN)) {
+        evidence[i] <- sprintf("segment gain (%.2f)", max(m))
+        hit_state[i] <- "GAIN"; hit_value[i] <- max(m)
+      } else if (want_loss[i] && any(m <= CNV_HOTSPOT_LOSS)) {
+        evidence[i] <- sprintf("segment loss (%.2f)", min(m))
+        hit_state[i] <- "LOSS"; hit_value[i] <- min(m)
+      }
+    }
+  }
+  
+  # 2. High-confidence focal calls overlapping the hotspot (any direction).
+  if (!is.null(focal_regions) && length(focal_regions)) {
+    ov <- GenomicRanges::findOverlaps(hotspots, focal_regions)
+    for (i in unique(S4Vectors::queryHits(ov))) {
+      calls <- S4Vectors::mcols(focal_regions)$label[S4Vectors::subjectHits(ov)[S4Vectors::queryHits(ov) == i]]
+      txt <- paste0("focal call: ", paste(unique(calls), collapse = ", "))
+      evidence[i] <- if (is.na(evidence[i])) txt else paste(evidence[i], txt, sep = "; ")
+      if (is.na(hit_state[i])) hit_state[i] <- sub("^.* ", "", calls[1])
+    }
+  }
+  
+  keep <- !is.na(evidence)
+  hit <- hotspots[keep]
+  S4Vectors::mcols(hit)$evidence <- evidence[keep]
+  S4Vectors::mcols(hit)$hit_state <- hit_state[keep]
+  S4Vectors::mcols(hit)$hit_value <- hit_value[keep]
+  hit
+}
+
+# Numeric chromosome order (chr1 < chr2 < ... < chr22 < chrX < chrY), so tables
+# and downloads are never sorted alphabetically (chr1, chr10, chr11, ...).
+chr_rank <- function(chr) {
+  x <- sub("^chr", "", as.character(chr))
+  x[x == "X"] <- "23"; x[x == "Y"] <- "24"; x[x %in% c("M", "MT")] <- "25"
+  suppressWarnings(as.integer(x))
+}
+
+order_by_genome <- function(df, chr_col, start_col) {
+  if (!nrow(df)) return(df)
+  df[order(chr_rank(df[[chr_col]]), as.numeric(df[[start_col]]), na.last = TRUE), , drop = FALSE]
+}
+
+# Cytoband span covered by a region, e.g. "20q11.1-q11.23" or "7q35".
+segment_band_label <- function(chr, start, end, cytobands) {
+  if (is.null(cytobands) || is.na(chr)) return(NA_character_)
+  b <- cytobands[cytobands$chrom == chr & cytobands$end >= start & cytobands$start <= end, , drop = FALSE]
+  if (!nrow(b)) return(NA_character_)
+  b <- b[order(b$start), , drop = FALSE]
+  first <- b$band[1]; last <- b$band[nrow(b)]
+  paste0(sub("^chr", "", chr), if (first == last) first else paste0(first, "-", last))
+}
+
+# Number of retained array probes inside each region (NA where it cannot be counted).
+cnv_count_probes <- function(probes, chr, st, en) {
+  n <- rep(NA_integer_, length(chr))
+  if (is.null(probes) || !length(chr)) return(n)
+  ok <- !is.na(chr) & !is.na(st) & !is.na(en)
+  if (!any(ok)) return(n)
+  n[ok] <- tryCatch(
+    as.integer(GenomicRanges::countOverlaps(
+      GenomicRanges::GRanges(chr[ok], IRanges::IRanges(as.integer(st[ok]), as.integer(en[ok]))),
+      probes)),
+    error = function(e) rep(NA_integer_, sum(ok))
+  )
+  n
+}
+
+# Chromosome / start / end spanned by each gene (NA if the gene is not annotated).
+cnv_gene_extent <- function(gene_regions, genes) {
+  out <- data.frame(chr = rep(NA_character_, length(genes)),
+                    st = rep(NA_integer_, length(genes)),
+                    en = rep(NA_integer_, length(genes)), stringsAsFactors = FALSE)
+  for (i in seq_along(genes)) {
+    reg <- gene_regions[S4Vectors::mcols(gene_regions)$name == genes[i]]
+    if (!length(reg)) next
+    chr <- as.character(GenomicRanges::seqnames(reg))[1]
+    reg <- reg[as.character(GenomicRanges::seqnames(reg)) == chr]
+    out$chr[i] <- chr
+    out$st[i] <- min(GenomicRanges::start(reg))
+    out$en[i] <- max(GenomicRanges::end(reg))
+  }
+  out
+}
+
+# One integrated table of all detected alterations (one row per event):
+#   - every autosomal segment beyond the GAIN / LOSS cut-offs;
+#   - every AMP / HOMDEL in a CGC gene (or CDKN2A/B) from the gene-versus-
+#     background calculation. AMP / HOMDEL states come ONLY from that
+#     calculation; segment means alone give GAIN / LOSS.
+# Duplicates are removed: an AMP / HOMDEL gene lying in a segment of the same
+# direction is merged into that segment's row (state upgraded to AMP / HOMDEL,
+# gene listed under "Genes"). Genes with no matching segment get their own row
+# with the gene coordinates.
+# The "Stem cell hotspot" column lists StemCNV-check hotspots hit by the row:
+# hotspots overlapped by the segment in the curated direction, plus hotspots
+# overlapping an AMP / HOMDEL gene.
+build_alteration_table <- function(diagnostic, gene_regions, hotspots_all, segments, cytobands) {
+  cols <- c("Alteration", "Genes", "CNV state", "log2 ratio", "Chr", "Start", "End",
+            "Size (kb)", "Stem cell hotspot", "Hotspot citations")
+  empty <- stats::setNames(
+    data.frame(character(), character(), character(), numeric(), character(), integer(),
+               integer(), numeric(), character(), character(),
+               stringsAsFactors = FALSE),
+    cols
+  )
+  hs_m <- if (length(hotspots_all)) S4Vectors::mcols(hotspots_all) else NULL
+  
+  hotspot_info <- function(idx) {
+    if (!length(idx)) return(list(label = "No", cites = NA_character_))
+    list(
+      label = paste0("Yes: ", paste(paste0(hs_m$name[idx], " (", hs_m$call_type[idx], ")"), collapse = ", ")),
+      cites = paste(unique(unlist(strsplit(hs_m$citations[idx], "; "))), collapse = "; ")
+    )
+  }
+  hotspots_in <- function(chr, st, en, direction = NULL) {
+    if (!length(hotspots_all) || is.na(chr)) return(integer())
+    ov <- S4Vectors::queryHits(GenomicRanges::findOverlaps(
+      hotspots_all, GenomicRanges::GRanges(chr, IRanges::IRanges(st, en))))
+    if (!is.null(direction)) ov <- ov[grepl(direction, hs_m$call_type[ov])]
+    unique(ov)
+  }
+  make_row <- function(alt, genes, state, val, chr, st, en, hs) {
+    stats::setNames(data.frame(
+      alt, genes, state, round(val, 3), chr, as.integer(st), as.integer(en),
+      round((en - st + 1) / 1000, 1), hs$label, hs$cites,
+      stringsAsFactors = FALSE
+    ), cols)
+  }
+  
+  # --- segments beyond the GAIN / LOSS cut-offs --------------------------------
+  seg <- segments
+  seg$seg.mean <- as.numeric(seg$seg.mean)
+  seg <- seg[seg$chrom %in% paste0("chr", 1:22) & is.finite(seg$seg.mean) &
+               (seg$seg.mean >= CNV_HOTSPOT_GAIN | seg$seg.mean <= CNV_HOTSPOT_LOSS), , drop = FALSE]
+  seg_chr <- as.character(seg$chrom)
+  seg_st  <- as.integer(seg$loc.start)
+  seg_en  <- as.integer(seg$loc.end)
+  seg_gr  <- if (nrow(seg)) GenomicRanges::GRanges(seg_chr, IRanges::IRanges(seg_st, seg_en)) else NULL
+  seg_genes <- vector("list", nrow(seg))   # AMP / HOMDEL calls merged into each segment
+  
+  # --- AMP / HOMDEL calls (gene versus background) ------------------------------
+  calls <- list()
+  for (i in seq_len(nrow(diagnostic))) {
+    g <- diagnostic$V10[i]
+    state <- diagnostic$CNV_state[i]
+    val <- as.numeric(diagnostic$focal[i])
+    bg <- as.numeric(diagnostic$nonfocal[i])
+    reg <- gene_regions[S4Vectors::mcols(gene_regions)$name == g]
+    if (length(reg)) {
+      chr <- as.character(GenomicRanges::seqnames(reg))[1]
+      reg <- reg[as.character(GenomicRanges::seqnames(reg)) == chr]
+      st <- min(GenomicRanges::start(reg)); en <- max(GenomicRanges::end(reg))
+    } else {
+      chr <- NA_character_; st <- NA_integer_; en <- NA_integer_
+    }
+    call <- list(gene = g, state = state, val = val, bg = bg, chr = chr, st = st, en = en)
+    
+    # Same-direction segment overlapping the gene -> merge (largest overlap wins).
+    k <- integer()
+    if (!is.na(chr) && !is.null(seg_gr)) {
+      gene_gr <- GenomicRanges::GRanges(chr, IRanges::IRanges(st, en))
+      hits <- GenomicRanges::findOverlaps(gene_gr, seg_gr)
+      cand <- S4Vectors::subjectHits(hits)
+      same_dir <- if (state == "AMP") seg$seg.mean[cand] > 0 else seg$seg.mean[cand] < 0
+      cand <- cand[same_dir]
+      if (length(cand)) {
+        ov_w <- pmin(en, seg_en[cand]) - pmax(st, seg_st[cand]) + 1
+        k <- cand[which.max(ov_w)]
+      }
+    }
+    if (length(k)) {
+      seg_genes[[k]] <- c(seg_genes[[k]], list(call))
+    } else {
+      calls[[length(calls) + 1]] <- call
+    }
+  }
+  
+  rows <- list()
+  
+  # Segment rows (with any merged AMP / HOMDEL genes).
+  for (k in seq_len(nrow(seg))) {
+    v <- seg$seg.mean[k]
+    gain <- v > 0
+    chr <- seg_chr[k]; st <- seg_st[k]; en <- seg_en[k]
+    merged <- seg_genes[[k]]
+    state <- if (gain) "GAIN" else "LOSS"
+    if (length(merged)) state <- if (gain) "AMP" else "HOMDEL"
+    idx <- hotspots_in(chr, st, en, if (gain) "gain" else "loss")
+    for (cl in merged) idx <- union(idx, hotspots_in(cl$chr, cl$st, cl$en))
+    rows[[length(rows) + 1]] <- make_row(
+      alt = segment_band_label(chr, st, en, cytobands),
+      genes = if (length(merged)) paste(vapply(merged, `[[`, character(1), "gene"), collapse = ", ")
+      else "",
+      state = state, val = v, chr = chr, st = st, en = en,
+      hs = hotspot_info(idx)
+    )
+  }
+  
+  # AMP / HOMDEL genes not covered by a same-direction segment.
+  for (cl in calls) {
+    rows[[length(rows) + 1]] <- make_row(
+      alt = if (is.na(cl$chr)) cl$gene else segment_band_label(cl$chr, cl$st, cl$en, cytobands),
+      genes = cl$gene, state = cl$state, val = cl$val,
+      chr = cl$chr, st = cl$st, en = cl$en,
+      hs = hotspot_info(hotspots_in(cl$chr, cl$st, cl$en))
+    )
+  }
+  
+  if (!length(rows)) return(empty)
+  out <- do.call(rbind, rows)
+  out[order(chr_rank(out$Chr), out$Start, na.last = TRUE), , drop = FALSE]
+}
+
+S4DataFrame_from <- function(df) {
+  S4Vectors::DataFrame(
+    mapping = df$mapping, call_type = df$call_type,
+    check_score = df$check_score, citations = df$citations
+  )
+}
+
+# Array-specific mixed-sex reference, cached per platform for the R process.
+cnv_reference_paths <- function(platform) {
+  switch(
+    platform,
+    "450K"   = c(female = cnv_config$ref_450k_female,   male = cnv_config$ref_450k_male),
+    "EPICv1" = c(female = cnv_config$ref_epicv1_female, male = cnv_config$ref_epicv1_male),
+    "EPICv2" = c(female = cnv_config$ref_epicv2_female, male = cnv_config$ref_epicv2_male),
+    stop("Unsupported CNV platform: ", platform, call. = FALSE)
+  )
+}
+
+# Extract the intensity matrix from a saved reference WITHOUT touching its S4
+# class. The release .rds files were created with the original 'conumee'
+# package; calling is() / @ on them makes R try to load 'conumee'. S4 slots are
+# stored as attributes, so the intensity table is read directly with attr().
+# Only conumee2 is used for all analysis (the pooled reference is rebuilt with
+# conumee2::CNV.load()).
+cnv_extract_intensity <- function(obj, label = "reference") {
+  if (is.matrix(obj) || is.data.frame(obj)) {
+    m <- as.matrix(obj)
+  } else {
+    int <- attr(obj, "intensity", exact = TRUE)
+    if (is.null(int)) {
+      stop("Could not find an 'intensity' table in the ", label,
+           " (class: ", paste(unclass(class(obj)), collapse = ", "), ").", call. = FALSE)
+    }
+    m <- as.matrix(as.data.frame(int, check.names = FALSE))
+  }
+  storage.mode(m) <- "double"
+  m
+}
+
+# Load the female and male references for one array and pool them into one
+# mixed-sex conumee reference (probes present in both; EPICv2 replicate IDs
+# collapsed to cg/ch IDs). Cached per platform for the R process.
+cnv_load_reference <- function(platform, progress = cnv_no_progress) {
+  label <- cnv_reference_label(platform)
+  cache_key <- paste(platform, "mixed", sep = "__")
+  if (exists(cache_key, envir = cnv_reference_cache, inherits = FALSE)) {
+    progress(0.25, paste(label, "already loaded"))
+    return(get(cache_key, envir = cnv_reference_cache, inherits = FALSE))
+  }
+  
+  paths <- cnv_reference_paths(platform)
+  mats <- list()
+  for (sx in names(paths)) {
+    f <- cnv_fetch_with_progress(paths[[sx]], paste(sx, platform, "CNV reference"), progress,
+                                 if (sx == "female") 0.18 else 0.21)
+    obj <- readRDS(f)
+    m <- cnv_extract_intensity(obj, paste(sx, platform, "reference"))
+    storage.mode(m) <- "double"
+    m <- collapse_v2_matrix(m)           # no-op for 450K / EPICv1 IDs
+    colnames(m) <- paste0(sx, "_", colnames(m))
+    mats[[sx]] <- m
+  }
+  
+  # Probes with no measured value in any control carry no information.
+  for (sx in names(mats)) {
+    keep_rows <- rowSums(is.finite(mats[[sx]])) > 0
+    mats[[sx]] <- mats[[sx]][keep_rows, , drop = FALSE]
+  }
+  n_f <- nrow(mats$female); n_m <- nrow(mats$male)
+  shared <- intersect(rownames(mats$female), rownames(mats$male))
+  message(sprintf(
+    "[CNV] %s references: female %s probes x %d controls (e.g. %s); male %s probes x %d controls (e.g. %s); %s shared",
+    platform,
+    format(n_f, big.mark = ","), ncol(mats$female), paste(utils::head(rownames(mats$female), 2), collapse = ", "),
+    format(n_m, big.mark = ","), ncol(mats$male),   paste(utils::head(rownames(mats$male), 2), collapse = ", "),
+    format(length(shared), big.mark = ",")))
+  
+  # Pool only if the two references cover (nearly) the same probes. Compare with
+  # the LARGER reference so a truncated / differently built file cannot shrink
+  # the pooled probe set. Otherwise use the larger reference alone and say why.
+  excluded_note <- NULL
+  if (length(shared) >= 0.9 * max(n_f, n_m)) {
+    pooled <- cbind(mats$female[shared, , drop = FALSE], mats$male[shared, , drop = FALSE])
+    n_female <- ncol(mats$female); n_male <- ncol(mats$male)
+  } else {
+    use <- if (n_f >= n_m) "female" else "male"
+    drop <- setdiff(c("female", "male"), use)
+    excluded_note <- sprintf(
+      "%s %s reference excluded: it shares only %s of %s probes with the %s reference (built on a different probe set)",
+      drop, platform, format(length(shared), big.mark = ","),
+      format(max(n_f, n_m), big.mark = ","), use)
+    warning("[CNV] ", excluded_note, call. = FALSE)
+    message("[CNV] ", excluded_note)
+    pooled <- mats[[use]]
+    n_female <- if (use == "female") ncol(mats$female) else 0L
+    n_male   <- if (use == "male")   ncol(mats$male)   else 0L
+  }
+  
+  ref <- conumee2::CNV.load(as.data.frame(pooled))
+  attr(ref, "n_female") <- n_female
+  attr(ref, "n_male") <- n_male
+  attr(ref, "excluded_note") <- excluded_note
+  
+  progress(0.25, sprintf("%s ready: %d female + %d male controls%s", label, n_female, n_male,
+                         if (!is.null(excluded_note)) paste0(" (", excluded_note, ")") else ""))
+  assign(cache_key, ref, envir = cnv_reference_cache)
+  ref
+}
+
+
+# EPICv2 replicate probe IDs (cg00000029_TC21) -> cg/ch IDs. Applied to the
+# query, the reference (already collapsed by the builder) and the annotation,
+# so all three always share plain cg/ch IDs.
+strip_v2_suffix <- function(x) sub("_[A-Z]{2}[0-9]+$", "", x)
+
+collapse_v2_matrix <- function(mat) {
+  mat <- as.matrix(mat)
+  ids <- strip_v2_suffix(rownames(mat))
+  if (identical(ids, rownames(mat))) return(mat)
+  sums <- rowsum(mat, ids, na.rm = TRUE)
+  ns   <- rowsum((!is.na(mat)) * 1, ids)
+  out  <- sums / ns
+  out[ns == 0] <- NA
+  out
+}
+
+harmonise_anno_ids <- function(anno) {
+  ids <- strip_v2_suffix(names(anno@probes))
+  if (identical(ids, names(anno@probes))) return(anno)
+  names(anno@probes) <- ids
+  anno@probes <- anno@probes[!duplicated(ids)]
+  anno
+}
+
+# Sex from the QCDPB-processed SeSAMe data (sesame::inferSex). There is no
+# fallback: if inferSex() errors or returns anything other than female / male,
+# the CNV run stops with a message that says why and what to check.
+#
+# Current sesame versions take a named vector of beta values and the platform
+# (inferSex(betas, platform)); older versions took the SigDF itself. The betas
+# come from the same QCDPB-processed SigDF as the CNV intensities (masked probes
+# are NA) and the platform is always passed explicitly, because sesame cannot
+# always detect it (e.g. EPICv2 vs EPIC) from the probe IDs.
+cnv_predict_sex_sesame <- function(sdf, platform) {
+  reason <- NULL
+  sesame_platform <- cnv_platform_config(platform)$sesame
+  sx <- tryCatch({
+    fm <- names(formals(sesame::inferSex))
+    if ("betas" %in% fm) {
+      betas <- sesame::getBetas(sdf)   # masked probes -> NA
+      as.character(sesame::inferSex(betas, platform = sesame_platform))[1]
+    } else {
+      as.character(sesame::inferSex(sdf))[1]
+    }
+  }, error = function(e) { reason <<- conditionMessage(e); NA_character_ })
+  if (!is.na(sx) && toupper(sx) %in% c("FEMALE", "MALE", "F", "M")) {
+    sex <- if (toupper(sx) %in% c("FEMALE", "F")) "Female" else "Male"
+    return(list(sex = sex, diff = NA_real_))
+  }
+  if (is.null(reason)) {
+    reason <- if (is.na(sx)) "inferSex returned no result" else
+      paste0("inferSex returned an unexpected value: '", sx, "'")
+  }
+  stop(
+    "Sex could not be inferred with sesame::inferSex() on the ", CNV_SESAME_PREP,
+    "-processed data (", reason, "). ",
+    "Check that the IDAT pair really comes from the selected array (",
+    platform,
+    ") and that the sample is not largely failed or masked, then run CNV profiling again.",
+    call. = FALSE
+  )
+}
+
+# Keep only annotation probes present in `ids` (reference probes, or probes with
+# a measured value in the query). Bins left with too few probes are removed so
+# CNV.bin / CNV.segment never see empty bins. Stops if coverage is below 50%.
+restrict_anno_to_probes <- function(anno, ids, what, bin_minprobes = 15) {
+  keep <- names(anno@probes) %in% ids
+  frac <- mean(keep)
+  message(sprintf("[CNV] %s covers %.1f%% of annotation probes (%s of %s)",
+                  what, 100 * frac, format(sum(keep), big.mark = ","),
+                  format(length(keep), big.mark = ",")))
+  if (frac < 0.5) {
+    stop(sprintf(paste0(
+      "The %s only covers %.1f%% of the annotation probes (example IDs: %s). ",
+      "Check that the release references for this array use the same probe IDs as the sample."),
+      what, 100 * frac, paste(utils::head(ids, 3), collapse = ", ")), call. = FALSE)
+  }
+  if (all(keep)) return(anno)
+  anno@probes <- anno@probes[keep]
+  n_per_bin <- GenomicRanges::countOverlaps(anno@bins, anno@probes)
+  anno@bins <- anno@bins[n_per_bin >= bin_minprobes]
+  anno
+}
+
+restrict_anno_to_ref <- function(anno, ref, bin_minprobes = 15) {
+  restrict_anno_to_probes(anno, rownames(ref@intensity), "CNV reference", bin_minprobes)
+}
+
+# Detail regions used for plotting: CGC genes (without individual CDKN2A/B)
+# restricted to the genes that were called, as in the standalone script.
+collapse_cdkn2ab_hits <- function(x) {
+  x <- unique(stats::na.omit(as.character(x)))
+  if ("CDKN2A/B" %in% x || any(x %in% c("CDKN2A", "CDKN2B"))) {
+    x <- setdiff(x, c("CDKN2A", "CDKN2B"))
+    x <- unique(c(x, "CDKN2A/B"))
+  }
+  x
+}
+
+cnv_build_annotation <- function(platform, resources, bin_size = 50000L,
+                                 reference = NULL, detail_regions = NULL) {
+  cfg <- cnv_platform_config(platform)
+  if (is.null(detail_regions)) {
+    detail_regions <- make_cgc_detail_regions(
+      resources$ensembl,
+      resources$cgc,
+      cfg$genome
+    )
+  }
+  
+  # Genome-matched exclusion regions: conumee2's hg19 list for 450K / EPICv1,
+  # the imported ex38 (hg38) for EPICv2. NULL if unavailable.
+  excluded <- if (isTRUE(cfg$use_exclude_regions)) resources$exclude_regions else NULL
+  
+  anno <- conumee2::CNV.create_anno(
+    bin_minprobes = 15,
+    exclude_regions = excluded,
+    array_type = cfg$conumee,
+    genome = cfg$genome,
+    detail_regions = detail_regions,
+    bin_minsize = as.integer(bin_size),
+    chrXY = FALSE   # autosomes only (mixed-sex reference)
+  )
+  anno <- harmonise_anno_ids(anno)
+  
+  # Ensure every annotation probe exists in the array-matched reference.
+  if (!is.null(reference)) {
+    anno <- restrict_anno_to_ref(anno, reference)
+  }
+  anno
+}
+
+cnv_read_written_table <- function(path) {
+  read.table(
+    path,
+    header = TRUE,
+    sep = "\t",
+    stringsAsFactors = FALSE,
+    check.names = FALSE,
+    quote = "",
+    comment.char = ""
+  )
+}
+
+cnv_harmonise_segments <- function(segment_df) {
+  segment_df <- strip_conumee_sample_prefix(segment_df)
+  
+  if (!"seg.mean" %in% names(segment_df)) {
+    candidate <- intersect(
+      c("seg.mean", "seg_mean", "mean", "Mean", "value", "Value", "log2", "log2ratio"),
+      names(segment_df)
+    )[1]
+    if (is.na(candidate)) stop("Could not identify the conumee segment-mean column.")
+    segment_df$seg.mean <- as.numeric(segment_df[[candidate]])
+  }
+  if (!"chrom" %in% names(segment_df)) {
+    candidate <- intersect(c("chrom", "Chromosome", "chr", "seqnames"), names(segment_df))[1]
+    if (is.na(candidate)) stop("Could not identify the conumee chromosome column.")
+    segment_df$chrom <- as.character(segment_df[[candidate]])
+  }
+  if (!"loc.start" %in% names(segment_df)) {
+    candidate <- intersect(c("loc.start", "Start", "start", "loc_start"), names(segment_df))[1]
+    if (is.na(candidate)) stop("Could not identify the conumee segment-start column.")
+    segment_df$loc.start <- as.integer(segment_df[[candidate]])
+  }
+  if (!"loc.end" %in% names(segment_df)) {
+    candidate <- intersect(c("loc.end", "End", "end", "loc_end"), names(segment_df))[1]
+    if (is.na(candidate)) stop("Could not identify the conumee segment-end column.")
+    segment_df$loc.end <- as.integer(segment_df[[candidate]])
+  }
+  segment_df
+}
+
+# Genes used to annotate segments (as ampl_del_gr_725 in the standalone script):
+# ALL Cancer Gene Census genes plus the combined CDKN2A/B region.
+make_cgc_segment_genes <- function(ensembl_gr, cancer_gene_census, ref_genome) {
+  ensembl_gr <- prepare_ensembl_gr(ensembl_gr)
+  cgc_gr <- ensembl_gr[
+    S4Vectors::mcols(ensembl_gr)$name %in% cancer_gene_census$Gene.Symbol
+  ]
+  cdkn2ab_range <- GenomicRanges::GRanges(
+    seqnames = "chr9",
+    ranges = if (identical(ref_genome, "hg19")) {
+      IRanges::IRanges(start = 21967751, end = 22009304)
+    } else {
+      IRanges::IRanges(start = 21967752, end = 21995301)
+    },
+    strand = "*"
+  )
+  S4Vectors::mcols(cdkn2ab_range)$name <- "CDKN2A/B"
+  S4Vectors::mcols(cgc_gr) <- S4Vectors::mcols(cgc_gr)[, "name", drop = FALSE]
+  cgc_gr <- GenomeInfoDb::keepStandardChromosomes(cgc_gr, pruning.mode = "coarse")
+  GenomeInfoDb::seqlevelsStyle(cgc_gr) <- "UCSC"   # match conumee's "chr1" naming
+  suppressWarnings(c(cgc_gr, cdkn2ab_range))
+}
+
+cnv_call_focal_events <- function(segment_df, detail_df, resources, sample_id) {
+  cgc <- resources$cgc
+  detail_regions <- make_cgc_segment_genes(resources$ensembl, cgc, resources$genome)
+  
+  segment_df <- cnv_harmonise_segments(segment_df)
+  # Autosomal calls only.
+  segment_df <- segment_df[segment_df$chrom %in% paste0("chr", 1:22), , drop = FALSE]
+  segment_df$ID <- sample_id
+  segment_df$V10 <- NA_character_
+  
+  for (i in seq_len(nrow(segment_df))) {
+    event <- GenomicRanges::GRanges(
+      seqnames = as.character(segment_df$chrom[i]),
+      ranges = IRanges::IRanges(
+        start = as.integer(segment_df$loc.start[i]),
+        end = as.integer(segment_df$loc.end[i])
+      )
+    )
+    hits <- GenomicRanges::findOverlaps(detail_regions, event)
+    hit_gr <- detail_regions[S4Vectors::queryHits(hits)]
+    nm <- S4Vectors::mcols(hit_gr)$name
+    nm <- nm[nm %in% c(cgc$Gene.Symbol, "CDKN2A/B")]
+    segment_df$V10[i] <- paste(unique(nm), collapse = "; ")
+  }
+  
+  segment_anno <- segment_df %>%
+    dplyr::mutate(V10 = strsplit(as.character(V10), ";\\s*")) %>%
+    tidyr::unnest(cols = "V10") %>%
+    dplyr::filter(!is.na(V10), V10 != "", !is.na(seg.mean), seg.mean != 0) %>%
+    dplyr::mutate(
+      CNV = ifelse(loc.end - loc.start < 4000000, "focal", "nonfocal")
+    )
+  
+  detail_df <- strip_conumee_sample_prefix(detail_df)
+  required_detail <- c("Chromosome", "Start", "End", "Name", "Value")
+  if (!all(required_detail %in% names(detail_df))) {
+    stop(
+      "Conumee detail output is missing required columns: ",
+      paste(setdiff(required_detail, names(detail_df)), collapse = ", "),
+      call. = FALSE
+    )
+  }
+  
+  detail_as_segments <- detail_df %>%
+    dplyr::transmute(
+      chrom = as.character(Chromosome),
+      loc.start = as.integer(Start),
+      loc.end = as.integer(End),
+      V10 = as.character(Name),
+      ID = sample_id,
+      num.mark = if ("num.mark" %in% names(detail_df)) num.mark else NA_integer_,
+      bstat = if ("bstat" %in% names(detail_df)) bstat else NA_real_,
+      pval = if ("pval" %in% names(detail_df)) pval else NA_real_,
+      seg.mean = as.numeric(Value),
+      seg.median = if ("seg.median" %in% names(detail_df)) seg.median else NA_real_,
+      CNV = "focal"
+    )
+  
+  wanted <- names(detail_as_segments)
+  for (cc in setdiff(wanted, names(segment_anno))) segment_anno[[cc]] <- NA
+  for (cc in setdiff(names(segment_anno), wanted)) detail_as_segments[[cc]] <- NA
+  segment_anno <- segment_anno[, wanted, drop = FALSE]
+  detail_as_segments <- detail_as_segments[, wanted, drop = FALSE]
+  
+  segment_anno <- segment_anno %>%
+    dplyr::mutate(CNV_flt = paste(ID, V10, chrom, loc.start, loc.end, CNV, sep = "_"))
+  detail_as_segments <- detail_as_segments %>%
+    dplyr::mutate(CNV_flt = paste(ID, V10, chrom, loc.start, loc.end, CNV, sep = "_"))
+  
+  segment_unique <- segment_anno %>%
+    dplyr::filter(!(CNV_flt %in% detail_as_segments$CNV_flt))
+  
+  amp_matrix <- dplyr::bind_rows(
+    segment_unique %>% dplyr::select(dplyr::all_of(wanted)),
+    detail_as_segments %>% dplyr::select(dplyr::all_of(wanted))
+  )
+  
+  if (nrow(amp_matrix) == 0) {
+    empty <- data.frame(
+      ID = character(), V10 = character(), focal = numeric(), nonfocal = numeric(),
+      CNV_state = character(), CNV_call = character(), stringsAsFactors = FALSE
+    )
+    return(list(all = empty, diagnostic = empty))
+  }
+  
+  result <- amp_matrix %>%
+    dplyr::group_by(ID, V10, CNV) %>%
+    dplyr::summarise(seg.mean = mean(seg.mean, na.rm = TRUE), .groups = "drop") %>%
+    tidyr::pivot_wider(names_from = CNV, values_from = seg.mean, values_fill = 0)
+  
+  if (!"focal" %in% names(result)) result$focal <- 0
+  if (!"nonfocal" %in% names(result)) result$nonfocal <- 0
+  
+  result <- result %>%
+    dplyr::mutate(
+      focal = as.numeric(focal),
+      nonfocal = as.numeric(nonfocal),
+      has_nonfocal = !is.na(nonfocal) & nonfocal != 0,
+      delta = ifelse(has_nonfocal, focal - nonfocal, NA_real_),
+      CNV_state = dplyr::case_when(
+        is.na(focal) ~ NA_character_,
+        focal < CNV_HOMDEL_THRESHOLD & (!has_nonfocal | delta <= -CNV_HOMDEL_MIN_DIFF) ~ "HOMDEL",
+        focal >= CNV_AMP_THRESHOLD ~ "AMP",
+        focal <= -0.17 & (!has_nonfocal | nonfocal <= 0 | delta < -0.17) ~ "LOSS",
+        focal >= 0.15 & (!has_nonfocal | nonfocal >= 0 | delta > 0.17) ~ "GAIN",
+        TRUE ~ "BALANCED"
+      ),
+      CNV_call = paste(CNV_state, round(focal, 3), sep = "_")
+    )
+  
+  diagnostic <- result %>%
+    dplyr::filter(!is.na(CNV_state), CNV_state %in% c("HOMDEL", "AMP"))
+  
+  list(all = result, diagnostic = diagnostic)
+}
+
+run_cnv_profile <- function(prefix, mset, sample_id, platform, bin_size = 50000L,
+                            progress = cnv_no_progress) {
+  progress(0.02, "Checking required CNV packages…")
+  cnv_require_packages()
+  cfg <- cnv_platform_config(platform)
+  
+  if (!is.null(mset) && ncol(mset) != 1) mset <- mset[, 1]
+  
+  # CNV query: SeSAMe (QCDPB) total intensities from the IDATs on the sample's
+  # own array, processed exactly as the release references.
+  red <- paste0(prefix, "_Red.idat")
+  grn <- paste0(prefix, "_Grn.idat")
+  if (!file.exists(red) || !file.exists(grn)) {
+    stop("The CNV workflow cannot find the matching Red/Green IDAT pair for prefix: ", prefix)
+  }
+  # Probe address/mask data needed by readIDATpair and the Q (quality-mask) step.
+  invisible(try(sesameData::sesameDataCache(paste0(cfg$sesame, ".address")), silent = TRUE))
+  progress(0.05, paste0("Reading ", platform, " IDAT intensities with SeSAMe (", cfg$sesame,
+                        if (nzchar(CNV_SESAME_PREP)) paste0(", prep ", CNV_SESAME_PREP) else "", ")…"))
+  sig <- sesame::readIDATpair(prefix.path = prefix, platform = cfg$sesame, verbose = FALSE)
+  if (nzchar(CNV_SESAME_PREP)) sig <- sesame::prepSesame(sig, CNV_SESAME_PREP)
+  
+  progress(0.08, "Predicting sex (sesame inferSex)…")
+  sex_call <- cnv_predict_sex_sesame(sig, platform)
+  
+  query_int <- sesame::totalIntensities(sig)
+  query_mat <- matrix(query_int, ncol = 1, dimnames = list(names(query_int), "query"))
+  query_mat <- collapse_v2_matrix(query_mat)   # EPICv2 replicate IDs -> cg/ch; no-op otherwise
+  measured <- rownames(query_mat)[is.finite(query_mat[, 1]) & query_mat[, 1] > 0]
+  
+  resources <- cnv_load_resources(platform, progress)
+  reference <- cnv_load_reference(platform, progress)
+  ref_label <- sprintf("%s (%s F + %s M)", cnv_reference_label(platform),
+                       attr(reference, "n_female"), attr(reference, "n_male"))
+  
+  progress(
+    0.28,
+    paste0(
+      "Building ", platform, " conumee annotation (", cfg$genome, ", autosomes, ",
+      format(as.integer(bin_size), big.mark = ","),
+      " bp bins; slowest step on first run)…"
+    )
+  )
+  anno <- cnv_build_annotation(platform, resources, bin_size, reference = reference)
+  anno <- restrict_anno_to_probes(anno, measured, paste0("Sample (", cfg$source_label, ")"))
+  n_bins <- tryCatch(length(anno@bins), error = function(e) NA_integer_)
+  n_probes <- tryCatch(length(anno@probes), error = function(e) NA_integer_)
+  if (!is.na(n_bins)) {
+    progress(
+      0.45,
+      paste0(
+        "Annotation ready: ", format(n_probes, big.mark = ","), " probes in ",
+        format(n_bins, big.mark = ","), " bins"
+      )
+    )
+  }
+  
+  query <- conumee2::CNV.load(as.data.frame(query_mat[names(anno@probes), , drop = FALSE]))
+  # Use a syntactic internal name so conumee's column prefixes are predictable
+  # (sample IDs like "GSM9238338 iPSC" contain spaces). The display ID is kept
+  # in sample_id and used for plots, tables and downloads.
+  conumee_id <- gsub("[^A-Za-z0-9_]", "_", sample_id)
+  if (!grepl("^[A-Za-z]", conumee_id)) conumee_id <- paste0("S_", conumee_id)
+  names(query) <- conumee_id
+  
+  progress(0.52, paste0("Fitting sample against the ", ref_label, " (CNV.fit)…"))
+  cnv <- conumee2::CNV.fit(query = query, ref = reference, anno = anno)
+  progress(0.60, "Summarising log2 ratios into genomic bins (CNV.bin)…")
+  cnv <- conumee2::CNV.bin(cnv)
+  progress(0.66, "Scoring Cancer Gene Census detail regions (CNV.detail)…")
+  cnv <- conumee2::CNV.detail(cnv)
+  progress(0.72, "Segmenting the copy-number profile (CNV.segment)…")
+  cnv <- conumee2::CNV.segment(cnv)
+  
+  progress(0.76, "Writing segment and detail tables…")
+  tmp_detail <- tempfile(fileext = ".detail.txt")
+  tmp_segments <- tempfile(fileext = ".seg")  # conumee expects a .seg extension
+  on.exit(unlink(c(tmp_detail, tmp_segments)), add = TRUE)
+  
+  conumee2::CNV.write(cnv, what = "detail", file = tmp_detail)
+  conumee2::CNV.write(cnv, what = "segments", file = tmp_segments)
+  
+  # Optional debugging: uncomment to see conumee's raw column names.
+  # message("detail cols: ", paste(names(cnv_read_written_table(tmp_detail)), collapse = ", "))
+  # message("segment cols: ", paste(names(cnv_read_written_table(tmp_segments)), collapse = ", "))
+  
+  detail_df <- cnv_read_written_table(tmp_detail)
+  segment_df <- cnv_read_written_table(tmp_segments)
+  progress(
+    0.80,
+    paste0("Calling AMP/HOMDEL events across ", format(nrow(segment_df), big.mark = ","), " segments…")
+  )
+  focal <- cnv_call_focal_events(segment_df, detail_df, resources, sample_id)
+  diagnostic <- as.data.frame(focal$diagnostic)
+  
+  segments_clean <- cnv_harmonise_segments(segment_df)
+  
+  # Probe-coverage filter: segments / AMP-HOMDEL genes covered by too few probes
+  # are dropped from the reported results (table, hotspot hits, plot labels).
+  probes_gr   <- tryCatch(cnv@anno@probes, error = function(e) NULL)
+  gene_regions <- make_cgc_segment_genes(resources$ensembl, resources$cgc, cfg$genome)
+  n_seg <- cnv_count_probes(probes_gr, as.character(segments_clean$chrom),
+                            segments_clean$loc.start, segments_clean$loc.end)
+  segments_supported <- segments_clean[is.na(n_seg) | n_seg >= CNV_MIN_SEGMENT_PROBES, , drop = FALSE]
+  if (nrow(diagnostic)) {
+    ext <- cnv_gene_extent(gene_regions, diagnostic$V10)
+    n_gene <- cnv_count_probes(probes_gr, ext$chr, ext$st, ext$en)
+    diagnostic <- diagnostic[is.na(n_gene) | n_gene >= CNV_MIN_GENE_PROBES, , drop = FALSE]
+  }
+  progress(0.83, paste0("Predicted sex: ", sex_call$sex))
+  
+  # Per-sample summary strings, as in diagnostics_results_<date>.txt
+  # (e.g. "EGFR_AMP_1.234|MYC_AMP_0.512").
+  summarise_calls <- function(state) {
+    d <- diagnostic[diagnostic$CNV_state == state, , drop = FALSE]
+    if (nrow(d) == 0) return("none")
+    paste(paste(d$V10, d$CNV_call, sep = "_"), collapse = "|")
+  }
+  amps <- summarise_calls("AMP")
+  dels <- summarise_calls("HOMDEL")
+  
+  # Plotting fit (Step 6 of the standalone script), with detail regions =
+  # CGC genes that were called (AMP/HOMDEL) + StemCNV-check hotspots that are
+  # HIT in this sample (overlapping segment in the curated direction, or an
+  # overlapping focal call). Hotspots are annotation only: they are not used
+  # for the high-confidence focal calls above.
+  hit_genes <- collapse_cdkn2ab_hits(diagnostic$V10)
+  hit_genes <- hit_genes[!is.na(hit_genes) & hit_genes != ""]
+  cnv_plot <- cnv
+  plot_detail <- FALSE
+  
+  detail_all <- make_cgc_detail_regions(resources$ensembl, resources$cgc, cfg$genome)
+  detail_hits <- detail_all[S4Vectors::mcols(detail_all)$name %in% hit_genes]
+  S4Vectors::mcols(detail_hits) <- S4Vectors::mcols(detail_hits)[, "name", drop = FALSE]
+  
+  # Focal-call regions with labels such as "KRAS AMP" for hotspot overlap.
+  focal_regions <- detail_hits
+  if (length(focal_regions)) {
+    st <- diagnostic$CNV_state[match(S4Vectors::mcols(focal_regions)$name, diagnostic$V10)]
+    st[is.na(st)] <- diagnostic$CNV_state[diagnostic$V10 %in% c("CDKN2A", "CDKN2B", "CDKN2A/B")][1]
+    S4Vectors::mcols(focal_regions)$label <- paste(S4Vectors::mcols(focal_regions)$name, st)
+  }
+  
+  hotspot_hits <- find_hotspot_hits(resources$hotspots, segments_supported, focal_regions)
+  hotspot_summary <- if (length(hotspot_hits)) {
+    paste(paste0(S4Vectors::mcols(hotspot_hits)$name, " [",
+                 S4Vectors::mcols(hotspot_hits)$call_type, "; ",
+                 S4Vectors::mcols(hotspot_hits)$evidence, "]"), collapse = " | ")
+  } else {
+    "none"
+  }
+  
+  alterations <- build_alteration_table(
+    diagnostic   = diagnostic,
+    gene_regions = gene_regions,
+    hotspots_all = resources$hotspots,
+    segments     = segments_supported,
+    cytobands    = resources$cytobands
+  )
+  
+  hotspots <- hotspot_hits
+  if (length(hotspots)) {
+    # A gene that is both a CGC hit and a hotspot (e.g. KRAS, TP53) is labelled once.
+    hotspots <- hotspots[!S4Vectors::mcols(hotspots)$name %in% S4Vectors::mcols(detail_hits)$name]
+    S4Vectors::mcols(hotspots) <- S4Vectors::mcols(hotspots)[, "name", drop = FALSE]
+  }
+  # Plot labels (drawn by cnv_add_plot_labels(), never overlapping):
+  # CGC genes with a focal call + StemCNV-check hotspots hit in this sample.
+  # Each label is anchored at the gene/region midpoint and its log2 value.
+  focal_value <- function(g) {
+    v <- as.numeric(diagnostic$focal[diagnostic$V10 == g])
+    if (!length(v) && g == "CDKN2A/B") {
+      v <- as.numeric(diagnostic$focal[diagnostic$V10 %in% c("CDKN2A", "CDKN2B")])
+    }
+    if (length(v)) v[which.max(abs(v))] else NA_real_
+  }
+  label_rows <- list()
+  if (length(detail_hits)) {
+    label_rows[[1]] <- data.frame(
+      label = S4Vectors::mcols(detail_hits)$name,
+      chr   = as.character(GenomicRanges::seqnames(detail_hits)),
+      pos   = (GenomicRanges::start(detail_hits) + GenomicRanges::end(detail_hits)) / 2,
+      value = vapply(S4Vectors::mcols(detail_hits)$name, focal_value, numeric(1)),
+      type  = "focal",
+      stringsAsFactors = FALSE
+    )
+  }
+  if (length(hotspots)) {
+    hh <- hotspot_hits[match(S4Vectors::mcols(hotspots)$name, S4Vectors::mcols(hotspot_hits)$name)]
+    label_rows[[length(label_rows) + 1]] <- data.frame(
+      label = S4Vectors::mcols(hh)$name,
+      chr   = as.character(GenomicRanges::seqnames(hh)),
+      pos   = (GenomicRanges::start(hh) + GenomicRanges::end(hh)) / 2,
+      value = S4Vectors::mcols(hh)$hit_value,
+      type  = "hotspot",
+      stringsAsFactors = FALSE
+    )
+  }
+  plot_labels <- if (length(label_rows)) do.call(rbind, label_rows) else
+    data.frame(label = character(), chr = character(), pos = numeric(),
+               value = numeric(), type = character(), stringsAsFactors = FALSE)
+  plot_labels$value[!is.finite(plot_labels$value)] <- 0
+  plot_detail <- nrow(plot_labels) > 0
+  
+  plot_main <- paste0(sample_id, " CNV hits (", cfg$source_label, ", ", ref_label,
+                      "; inferred sex: ", sex_call$sex, ")")
+  
+  progress(
+    0.98,
+    paste0(
+      "Done: ", format(nrow(segment_df), big.mark = ","), " segments, ",
+      nrow(diagnostic), " high-confidence focal call(s)"
+    )
+  )
+  
+  list(
+    cnv = cnv,
+    cnv_plot = cnv_plot,
+    plot_labels = plot_labels,
+    plot_detail = plot_detail,
+    plot_main = plot_main,
+    segments = order_by_genome(segments_clean, "chrom", "loc.start"),
+    detail = strip_conumee_sample_prefix(detail_df),
+    focal_diagnostic = diagnostic,
+    amps = amps,
+    hotspots_hit = hotspot_summary,
+    alterations = alterations,
+    dels = dels,
+    sample_id = sample_id,
+    platform = platform,
+    sex = CNV_REFERENCE_SEX,
+    reference_label = ref_label,
+    reference_note = attr(reference, "excluded_note"),
+    inferred_sex = sex_call$sex,
+    sex_diff = sex_call$diff,
+    sex_note = sex_call$note,
+    genome = cfg$genome,
+    bin_size = as.integer(bin_size)
+  )
+}
+
+# Draw the genome plot (autosomes only).
+cnv_draw_genomeplot <- function(res, detail = res$plot_detail) {
+  # conumee2 draws the profile WITHOUT its own detail labels; the labels are
+  # added by cnv_add_plot_labels() so that they never overlap. The y-range is
+  # widened to leave label rows above and below the profile.
+  args <- list(res$cnv_plot, chr = CNV_PLOT_CHRS, cols = CNV_PLOT_COLS,
+               main = res$plot_main, detail = FALSE, ylim = CNV_PLOT_YLIM)
+  drawn <- tryCatch({ do.call(conumee2::CNV.genomeplot, args); TRUE },
+                    error = function(e) {
+                      if (!grepl("unused argument", conditionMessage(e))) stop(e)
+                      FALSE
+                    })
+  if (!drawn) {                       # conumee2 version without 'ylim'
+    args$ylim <- NULL
+    do.call(conumee2::CNV.genomeplot, args)
+  }
+  if (isTRUE(detail) && !is.null(res$plot_labels) && nrow(res$plot_labels)) {
+    tryCatch(
+      cnv_add_plot_labels(res$cnv_plot, res$plot_labels),
+      error = function(e) message("[CNV] Could not add plot labels: ", conditionMessage(e))
+    )
+  }
+}
+
+# Non-overlapping labels on a conumee2 genome plot.
+#  x: conumee lays chromosomes end to end: x = cumulative size of the preceding
+#     plotted chromosomes + position (same as CNV.genomeplot).
+#  y: gains are labelled in rows above the profile, losses in rows below; each
+#     label goes into the first row where it does not touch its neighbours, and a
+#     leader line joins it to a marker at its log2 value.
+cnv_add_plot_labels <- function(cnv, labels, cex = 0.62) {
+  genome <- cnv@anno@genome
+  chrs <- CNV_PLOT_CHRS[CNV_PLOT_CHRS %in% rownames(genome)]
+  sizes <- as.numeric(genome[chrs, "size"])
+  offset <- stats::setNames(c(0, cumsum(sizes))[seq_along(chrs)], chrs)
+  
+  lab <- labels[labels$chr %in% chrs, , drop = FALSE]
+  if (!nrow(lab)) return(invisible(NULL))
+  lab$x <- offset[lab$chr] + lab$pos
+  lab$up <- lab$value >= 0
+  
+  usr <- graphics::par("usr")
+  row_h <- graphics::strheight("Xg", cex = cex) * 1.45
+  pad <- graphics::strwidth("  ", cex = cex)
+  lab$w <- graphics::strwidth(lab$label, cex = cex) + pad
+  
+  # Label bands: just outside the default profile range (+/-1.25).
+  band_start <- c(up = min(1.32, usr[4] - row_h), down = max(-1.32, usr[3] + row_h))
+  n_rows <- c(
+    up   = max(1, floor((usr[4] - row_h / 2 - band_start[["up"]]) / row_h) + 1),
+    down = max(1, floor((band_start[["down"]] - usr[3] - row_h / 2) / row_h) + 1)
+  )
+  
+  lab$lx <- NA_real_; lab$ly <- NA_real_
+  for (side in c("up", "down")) {
+    idx <- which(lab$up == (side == "up"))
+    idx <- idx[order(lab$x[idx])]
+    right_edge <- rep(-Inf, n_rows[[side]])
+    for (k in idx) {
+      lx <- min(max(lab$x[k], usr[1] + lab$w[k] / 2), usr[2] - lab$w[k] / 2)
+      row <- which(right_edge <= lx - lab$w[k] / 2)[1]
+      if (is.na(row)) {
+        # All rows occupied here: shift right past the row that frees up first.
+        row <- which.min(right_edge)
+        lx <- min(right_edge[row] + lab$w[k] / 2, usr[2] - lab$w[k] / 2)
+      }
+      right_edge[row] <- lx + lab$w[k] / 2
+      lab$lx[k] <- lx
+      lab$ly[k] <- if (side == "up") band_start[["up"]] + (row - 1) * row_h
+      else band_start[["down"]] - (row - 1) * row_h
+    }
+  }
+  
+  col_txt <- ifelse(lab$type == "hotspot", "#1B7837", "black")
+  y_val <- pmin(pmax(lab$value, usr[3]), usr[4])
+  graphics::segments(lab$x, y_val, lab$lx, lab$ly + ifelse(lab$up, -row_h / 2, row_h / 2),
+                     col = "grey55", lwd = 0.6)
+  graphics::points(lab$x, y_val, pch = 19, cex = 0.45, col = col_txt)
+  graphics::rect(lab$lx - lab$w / 2, lab$ly - row_h / 2, lab$lx + lab$w / 2, lab$ly + row_h / 2,
+                 col = grDevices::adjustcolor("white", alpha.f = 0.85), border = NA)
+  graphics::text(lab$lx, lab$ly, lab$label, cex = cex, col = col_txt)
+  
+  graphics::legend("bottomright", bty = "n", cex = 0.65, text.col = c("black", "#1B7837"),
+                   legend = c("focal call (CGC)", "stem cell hotspot"), inset = c(0, 0.005))
+  invisible(lab)
+}
+
 # Activate thematic for ggplot2 styling based on bs_theme
 thematic::thematic_shiny()
 
 # Define a Bootstrap theme using bs_theme
-theme <- bs_theme(
-  bootswatch = "flatly",
-  primary = "#0072B2",        # Set primary color to match buttons
-  base_font = font_google("Roboto")
-)
+# Self-hosted: no Google Fonts (no outbound request, no visitor IPs sent to
+# Google); Roboto is used where installed, otherwise the next font in the stack.
+# Otherwise: Roboto from Google Fonts, as before.
+theme <- if (STEMCLASS_LOCAL) {
+  bs_theme(
+    bootswatch = "flatly",
+    primary = "#0072B2",        # Set primary color to match buttons
+    base_font = font_collection("Roboto", "Helvetica Neue", "Arial", "sans-serif")
+  )
+} else {
+  bs_theme(
+    bootswatch = "flatly",
+    primary = "#0072B2",        # Set primary color to match buttons
+    base_font = font_google("Roboto")
+  )
+}
 
 # Custom CSS to style the sidebar panel and navbar
 custom_css <- "
@@ -350,9 +1902,12 @@ a:hover {
 ui <- navbarPage(
   title = "SteMClass",
   theme = theme,
-  useShinyjs(),
-  tags$head(
-    tags$style(HTML(custom_css))
+  # Non-tab content belongs in `header` (silences the navbarPage warning).
+  header = tagList(
+    useShinyjs(),
+    tags$head(
+      tags$style(HTML(custom_css))
+    )
   ),
   tabPanel(
     title = "Classification",
@@ -380,65 +1935,65 @@ ui <- navbarPage(
           ),
           tags$div(
             style = "text-align:center; color:#888; margin:8px 0;",
-            tags$span("— OR —")
+            tags$span("- OR -")
           ),
           
-        ui_example_block <- tagList(
-          
-          
-          checkboxInput(
-  inputId = "use_example",
-  label   = tags$span(icon("file-import"), " Import an example from GEO Repository"),
-  value   = FALSE
-),
-          
-          
-          # Collapsible panel – only visible when checkbox is ticked
-          conditionalPanel(
-            condition = "input.use_example == true",
+          ui_example_block <- tagList(
             
-            wellPanel(
-              style = "background:#f8f9fa ; border:1px solid #0072B2; padding:10px;",
+            
+            checkboxInput(
+              inputId = "use_example",
+              label   = tags$span(icon("file-import"), " Import an example from GEO Repository"),
+              value   = FALSE
+            ),
+            
+            
+            # Collapsible panel – only visible when checkbox is ticked
+            conditionalPanel(
+              condition = "input.use_example == true",
               
-              selectInput(
-                inputId  = "example_sample",
-                label    = "Choose an example sample:",
-                choices  = example_choices,
-                selected = ""
-              ),
-              
-              # Small status line
-              uiOutput("example_status")
-            )
-          ),
-          
-          hr()
-        )
+              wellPanel(
+                style = "background:#f8f9fa ; border:1px solid #0072B2; padding:10px;",
+                
+                selectInput(
+                  inputId  = "example_sample",
+                  label    = "Choose an example sample:",
+                  choices  = example_choices,
+                  selected = ""
+                ),
+                
+                # Small status line
+                uiOutput("example_status")
+              )
+            ),
+            
+            hr()
+          )
         ),
         
         
-          actionButton(
-            inputId = "load_samples",
-            label   = "Preprocess Data",
-            icon    = icon("broom"),
-            style   = "margin-bottom: 10px;"
-          ),
+        actionButton(
+          inputId = "load_samples",
+          label   = "Preprocess Data",
+          icon    = icon("broom"),
+          style   = "margin-bottom: 10px;"
+        ),
         hr(),
-          
-          actionButton(
-            inputId = "classify",
-            label   = "Run Classification",
-            icon    = icon("play"),
-            style   = "margin-bottom: 10px;"
-          ),
+        
+        actionButton(
+          inputId = "classify",
+          label   = "Run Classification",
+          icon    = icon("play"),
+          style   = "margin-bottom: 10px;"
+        ),
         hr(),
-          
-          actionButton(
-            inputId = "reset",
-            label   = "New Analysis",
-            icon    = icon("redo")
-          ),
-          
+        
+        actionButton(
+          inputId = "reset",
+          label   = "New Analysis",
+          icon    = icon("redo")
+        ),
+        
         hr(),
         h4("About SteMClass:"),
         tags$p(
@@ -459,7 +2014,7 @@ ui <- navbarPage(
       ),  
       
       mainPanel(
-        # Instructions panel — visible until results are ready
+        # Instructions panel - visible until results are ready
         conditionalPanel(
           condition = "!output.results_ready",
           
@@ -479,7 +2034,7 @@ ui <- navbarPage(
               tags$li(
                 icon("tag"), " Enter the",
                 tags$b(" Sample ID")
-                ),
+              ),
               tags$li(
                 icon("microchip")," Select the", 
                 tags$b(" Array version"), " ", " (450K, EPICv1, or EPICv2)."
@@ -508,7 +2063,7 @@ ui <- navbarPage(
           )
         ),
         
-        # Results panel — visible once results are ready
+        # Results panel - visible once results are ready
         conditionalPanel(
           condition = "output.results_ready",
           div(style = "position: relative; padding-bottom: 60px;",
@@ -641,6 +2196,77 @@ ui <- navbarPage(
         )
       )
     )
+  ),
+  tabPanel(
+    title = "CNV Profiling",
+    sidebarLayout(
+      sidebarPanel(
+        h4("Copy Number Profiling"),
+        tags$p(
+          "CNV profiling reads the uploaded IDAT pair (450K, EPICv1 or EPICv2) with SeSAMe (QCDPB) ",
+          "and fits it with conumee2 against the array-specific control references.",
+          "Copy number is reported for the autosomes, sex is predicted with SeSAMe inferSex."
+        ),
+        numericInput(
+          inputId = "cnv_bin_size",
+          label = "Minimum CNV bin size (bp):",
+          value = 50000,
+          min = 10000,
+          step = 10000
+        ),
+        actionButton(
+          inputId = "run_cnv",
+          label = "Run CNV Profiling",
+          icon = icon("chart-line")
+        ),
+        hr(),
+        h4("Instructions:"),
+        tags$ol(
+          tags$li("Upload the Red/Green IDAT pair and enter the sample ID on the Classification tab."),
+          tags$li("Select the correct array version on the Classification tab."),
+          tags$li('Click "Run CNV Profiling".'),
+          tags$li("Inspect the autosomal profile, the predicted sex and high-confidence calls.")
+        ),
+        hr(),
+        uiOutput("cnv_input_summary")
+      ),
+      mainPanel(
+        conditionalPanel(
+          condition = "!output.cnv_results_ready",
+          div(
+            class = "well instructions-panel",
+            style = "max-width:850px; margin:40px auto; padding:30px; background:#f9f9f9; border-radius:8px;",
+            h3(icon("chart-line"), " CNV Profiling"),
+            tags$p(
+              "No CNV result has been generated for this session. The analysis runs independently of the methylation classifier and starts from the uploaded IDAT intensities."
+            )
+          )
+        ),
+        conditionalPanel(
+          condition = "output.cnv_results_ready",
+          uiOutput("cnv_result_header"),
+          withSpinner(
+            plotOutput("cnv_genome_plot", height = "650px"),
+            type = 5,
+            color = "#0072B2"
+          ),
+          fluidRow(
+            column(4, downloadButton("download_cnv_plot", "Download Labelled Plot")),
+            column(4, downloadButton("download_cnv_plot_unlabelled", "Download Unlabelled Plot")),
+            column(4, downloadButton("download_cnv_focal", "Download Alterations Table"))
+          ),
+          hr(),
+          h3("Detected alterations"),
+          tags$p(
+            "Autosomal segments with a gain (log2 ≥ ", CNV_HOTSPOT_GAIN, "), loss (log2 ≤ ", CNV_HOTSPOT_LOSS,
+            "), amplifications (AMP, log2 ≥ ", CNV_AMP_THRESHOLD, ") and homozygous deletions (HOMDEL, log2 < ", CNV_HOMDEL_THRESHOLD, "and ", CNV_HOMDEL_MIN_DIFF, "below the background segment). The stem cell hotspot column lists known iPSC hotspots (doi: 10.64898/2025.12.01.691615) hit by each alteration, which are highlighted in green in the plot. Cancer gene census genes are labeled in black.",
+            "Coordinates are ", tags$code("hg19"), " for 450K / EPICv1 and ",
+            tags$code("hg38"), " for EPICv2."
+          ),
+          DT::DTOutput("cnv_focal_table")
+        )
+      )
+    )
   )
 )
 
@@ -653,18 +2279,27 @@ server <- function(input, output, session) {
     Find(function(s) s$accession == acc, example_samples)
   })
   
-  # ── Function: download both IDATs to tempdir, return their paths ─────────
+  # ── Function: fetch both IDATs to tempdir, return their paths ────────────
+  # Self-hosted: copied from STEMCLASS_DATA_DIR; otherwise downloaded.
+  fetch_example_file <- function(src, dest) {
+    if (is_remote(src)) {
+      download.file(src, dest, mode = "wb", quiet = TRUE)
+    } else {
+      if (!file.copy(src, dest, overwrite = TRUE)) stop("Example file not found: ", src)
+    }
+  }
+  
   download_example_idats <- function(ex) {
     tmp <- tempdir()
     grn_path <- file.path(tmp, paste0(ex$accession, "_Grn.idat"))
     red_path <- file.path(tmp, paste0(ex$accession, "_Red.idat"))
     
-    withProgress(message = "Downloading example IDAT files", value = 0, {
-      incProgress(0.5, detail = "Downloading Grn channel…")
-      download.file(ex$grn_url, grn_path, mode = "wb", quiet = TRUE)
+    withProgress(message = "Loading example IDAT files", value = 0, {
+      incProgress(0.5, detail = "Grn channel…")
+      fetch_example_file(ex$grn_url, grn_path)
       
-      incProgress(0.5, detail = "Downloading Red channel…")
-      download.file(ex$red_url, red_path, mode = "wb", quiet = TRUE)
+      incProgress(0.5, detail = "Red channel…")
+      fetch_example_file(ex$red_url, red_path)
     })
     
     list(grn = grn_path, red = red_path)
@@ -698,39 +2333,153 @@ server <- function(input, output, session) {
     )
   })
   
-  beta_data <- reactive({
+  # ── IDAT input check ───────────────────────────────────────────────────────
+  # The sample must be supplied as exactly two IDAT files: one *_Red.idat and
+  # one *_Grn.idat with the same prefix (or one of the built-in examples).
+  # Returns NULL when the input is fine, otherwise a message for the user.
+  idat_input_problem <- function() {
+    if (isTRUE(input$use_example) && !is.null(input$example_sample) &&
+        nzchar(input$example_sample)) {
+      return(NULL)                       # example import: the pair is fixed
+    }
+    f <- input$idat_files
+    if (is.null(f) || nrow(f) == 0) {
+      return(if (isTRUE(input$use_example)) {
+        paste0("No example sample is selected and no IDAT files are uploaded. ",
+               "Choose an example sample, or untick the example option and upload ",
+               "exactly two IDAT files: one *_Red.idat and one *_Grn.idat.")
+      } else {
+        paste0("No IDAT files are uploaded. Upload exactly two IDAT files: ",
+               "one *_Red.idat and one *_Grn.idat from the same sample.")
+      })
+    }
+    nm <- f$name
+    shown <- paste(nm, collapse = ", ")
+    if (nrow(f) != 2) {
+      return(sprintf(
+        paste0("%d file%s uploaded (%s). Exactly two IDAT files are required: ",
+               "one *_Red.idat and one *_Grn.idat from the same sample."),
+        nrow(f), if (nrow(f) == 1) " was" else "s were", shown))
+    }
+    not_idat <- nm[!grepl("\\.idat$", nm, ignore.case = TRUE)]
+    if (length(not_idat)) {
+      return(sprintf(
+        "Only .idat files can be used, but this is not one: %s. Upload the sample's *_Red.idat and *_Grn.idat files (not compressed or renamed copies).",
+        paste(not_idat, collapse = ", ")))
+    }
+    n_red <- sum(grepl("_Red\\.idat$", nm, ignore.case = TRUE))
+    n_grn <- sum(grepl("_Grn\\.idat$", nm, ignore.case = TRUE))
+    if (n_red != 1 || n_grn != 1) {
+      return(sprintf(
+        paste0("The two files must be one *_Red.idat and one *_Grn.idat, but you ",
+               "uploaded: %s (%d Red, %d Grn). Both files of a sample are needed, ",
+               "e.g. 206687210042_R03C01_Red.idat and 206687210042_R03C01_Grn.idat."),
+        shown, n_red, n_grn))
+    }
+    prefix <- sub("_(Red|Grn)\\.idat$", "", nm, ignore.case = TRUE)
+    if (prefix[1] != prefix[2]) {
+      return(sprintf(
+        paste0("The Red and Green files do not belong to the same sample (%s). ",
+               "Their names must be identical apart from _Red / _Grn."),
+        shown))
+    }
+    NULL
+  }
+  
+  # Show the problem as an error notification when an analysis is started, and
+  # clear it as soon as the input changes.
+  observeEvent(list(input$load_samples, input$classify, input$run_cnv), {
+    msg <- idat_input_problem()
+    if (is.null(msg)) {
+      removeNotification("idat_error")
+    } else {
+      showNotification(msg, type = "error", duration = NULL, id = "idat_error")
+    }
+  }, ignoreInit = TRUE)
+  
+  observeEvent(list(input$idat_files, input$use_example, input$example_sample), {
+    removeNotification("idat_error")
+  }, ignoreInit = TRUE)
+  
+  # ── Shared raw-IDAT reactive used by classification and CNV profiling ─────
+  sample_files <- reactive({
     req(input$sample_accession, input$array_version)
     
-    # ── A) Example path
+    problem <- idat_input_problem()
+    if (!is.null(problem)) validate(need(FALSE, problem))
+    
+    session_dir <- file.path(tempdir(), paste0("stemclass_", session$token))
+    dir.create(session_dir, recursive = TRUE, showWarnings = FALSE)
+    
     if (isTRUE(input$use_example) && input$example_sample != "") {
-      ex <- selected_example(); req(ex)
-      paths <- download_example_idats(ex)
-      tmp <- tempdir()
-      basename0 <- file.path(tmp, ex$accession)
-      targets <- data.frame(Sample_accession = ex$accession,
-                            Array_version    = ex$array_version,
-                            Basename         = basename0,
-                            stringsAsFactors = FALSE)
-      
-      # ── B) Upload path
+      ex <- selected_example()
+      req(ex)
+      paths <- tryCatch(download_example_idats(ex), error = function(e) e)
+      ex_files <- if (inherits(paths, "error")) character() else c(paths$grn, paths$red)
+      if (length(ex_files) != 2 || !all(file.exists(ex_files)) ||
+          any(file.size(ex_files) == 0)) {
+        msg <- paste0(
+          "The example IDAT files for ", ex$accession, " could not be imported",
+          if (inherits(paths, "error")) paste0(" (", conditionMessage(paths), ")") else
+            " (the files are missing or empty)",
+          ". Check the connection or the data directory and select the example again.")
+        showNotification(msg, type = "error", duration = NULL, id = "idat_error")
+        validate(need(FALSE, msg))
+      }
+      source_paths <- c(paths$grn, paths$red)
+      dest_names <- basename(source_paths)
     } else {
       req(input$idat_files)
-      if (nrow(input$idat_files) != 2)
-        stop("Please upload exactly two IDAT files (one Red and one Grn).")
-      tmp <- tempdir()
-      file.copy(input$idat_files$datapath,
-                file.path(tmp, input$idat_files$name), overwrite = TRUE)
-      basename0 <- sub("_(Grn|Red)\\.idat$", "", input$idat_files$name[1])
-      targets <- data.frame(Sample_accession = input$sample_accession,
-                            Array_version    = input$array_version,
-                            Basename         = basename0,
-                            stringsAsFactors = FALSE)
-    }   
+      source_paths <- input$idat_files$datapath
+      dest_names <- input$idat_files$name
+    }
     
-    # ── Shared preprocessing (runs for both paths)
+    dest_paths <- file.path(session_dir, dest_names)
+    copied <- file.copy(source_paths, dest_paths, overwrite = TRUE)
+    validate(need(all(copied), "Could not copy the uploaded IDAT files into the analysis workspace."))
+    
+    red <- grep("_Red\\.idat$", dest_paths, value = TRUE, ignore.case = TRUE)
+    grn <- grep("_Grn\\.idat$", dest_paths, value = TRUE, ignore.case = TRUE)
+    validate(
+      need(length(red) == 1, "Exactly one *_Red.idat file is required."),
+      need(length(grn) == 1, "Exactly one *_Grn.idat file is required.")
+    )
+    
+    red_prefix <- sub("_Red\\.idat$", "", red, ignore.case = TRUE)
+    grn_prefix <- sub("_Grn\\.idat$", "", grn, ignore.case = TRUE)
+    validate(
+      need(identical(red_prefix, grn_prefix),
+           "The Red and Green IDAT filenames do not form a matching pair.")
+    )
+    
+    list(
+      sample_id = input$sample_accession,
+      platform = input$array_version,
+      prefix = red_prefix,
+      directory = session_dir,
+      red = red,
+      grn = grn
+    )
+  })
+  
+  # Shared preprocessing: returns the 450K beta matrix (classifier) and the
+  # 450K MethylSet (CNV profiling) from one Noob run.
+  preprocessed_data <- reactive({
+    sf <- sample_files()
+    req(sf)
+    
+    tmp <- sf$directory
+    targets <- data.frame(
+      Sample_accession = sf$sample_id,
+      Array_version = sf$platform,
+      Basename = sf$prefix,
+      stringsAsFactors = FALSE
+    )
+    
+    # ── Shared preprocessing (runs for both uploaded and example IDATs)
     withProgress(message = "Reading & preprocessing IDATs", value = 0, {
       incProgress(0.2, detail = "Loading raw data…")
-     
+      
       
       library(tidymodels)
       library(methylumi)
@@ -773,6 +2522,7 @@ server <- function(input, output, session) {
         incProgress(0.3, detail = "Preprocessing (Noob)…")
         rgSet@annotation <- c(array = "IlluminaHumanMethylationEPICv2", annotation = "20a1.hg38")
         mSetv2 <- preprocessNoob(rgSet)
+        mset_native <- mSetv2            # own-array Noob data for CNV / sex
         mSetv2   <- epicv2clean(mSetv2)
         
         incProgress(0.05, detail = "Converting to 450K…")
@@ -789,6 +2539,7 @@ server <- function(input, output, session) {
       } else if (input$array_version == "EPICv1") {
         incProgress(0.3, detail = "Preprocessing (Noob)…")
         mSet <- preprocessNoob(rgSet)
+        mset_native <- mSet              # own-array Noob data for CNV / sex
         
         incProgress(0.05, detail = "Converting to 450K…")
         mSet <- convertArray(mSet,
@@ -802,6 +2553,7 @@ server <- function(input, output, session) {
       } else if (input$array_version == "450K") {
         incProgress(0.3, detail = "Preprocessing (Noob)…")
         mSet <- preprocessNoob(rgSet)
+        mset_native <- mSet              # own-array Noob data for CNV / sex
         incProgress(0.35, detail = "Mapping to genome…")
         mSetSq <- mapToGenome(mSet)
         beta   <- getBeta(mSetSq)
@@ -814,11 +2566,15 @@ server <- function(input, output, session) {
       incProgress(0.1, detail = "Finalizing…")
       beta_mat <- t(beta)
       
-      # return
-      beta_mat
+      # return both views of the same preprocessed sample
+      list(beta = beta_mat, mset = mSet, mset_native = mset_native)
     })
   })
-
+  
+  beta_data <- reactive({
+    preprocessed_data()$beta
+  })
+  
   
   
   
@@ -836,52 +2592,64 @@ server <- function(input, output, session) {
   })
   
   
+  # Reference objects: loaded once per R process (see cached()), so a
+  # "New Analysis" (session reload) in the same container does not reload them.
+  
   # Reactive expression to wrap the train_data
+  # (training-set beta matrix; used by the gene-level heatmap)
   ref_beta <- reactive({
-    con <- url(urls$train_gmset, "rb")
-    load(con)
-    bVals_train <- getBeta(gmset_train)
-    bVals_train
+    cached("ref_beta", {
+      env <- load_rda_src(urls$train_gmset)
+      minfi::getBeta(env$gmset_train)
+    })
   })
   
   
   training_data <- reactive({
-    # with rownames = sample IDs and a column "Class"
-    train_data <- data.table::fread(urls$train_data)
-    train_data$Class <- factor(train_data$Class_rf)
-    train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
-    if (!"Class" %in% colnames(train_data)) {
-      stop("Global train_data must contain a column named 'Class'")
-    }
-    train_data
+    cached("training_data", {
+      # with rownames = sample IDs and a column "Class"
+      train_data <- data.table::fread(urls$train_data)
+      train_data$Class <- factor(train_data$Class_rf)
+      train_data <- train_data[, !names(train_data) %in% "Class_rf", with = FALSE]
+      if (!"Class" %in% colnames(train_data)) {
+        stop("Global train_data must contain a column named 'Class'")
+      }
+      train_data
+    })
   })
   
   # Reactive expression to wrap the marker data
   marker_data <- reactive({
-    # with rownames = sample IDs and a column "Class"
-    marker_data <- data.table::fread(urls$marker_data)
-    marker_data$Class <- factor(marker_data$Class_rf)
-    marker_data <- marker_data[, !names(marker_data) %in% "Class_rf", with = FALSE]
-    if (!"Class" %in% colnames(marker_data)) {
-      stop("Global marker_data must contain a column named 'Class'")
-    }
-    marker_data
+    cached("marker_data", {
+      # with rownames = sample IDs and a column "Class"
+      marker_data <- data.table::fread(urls$marker_data)
+      marker_data$Class <- factor(marker_data$Class_rf)
+      marker_data <- marker_data[, !names(marker_data) %in% "Class_rf", with = FALSE]
+      if (!"Class" %in% colnames(marker_data)) {
+        stop("Global marker_data must contain a column named 'Class'")
+      }
+      marker_data
+    })
   })
   
   
   
   # Reactive expression to wrap the CpG anno
   ann450K <- reactive({
-    ann450K <- data.table::fread(urls$cpg_anno)
-    ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
-    ann450K
+    cached("ann450K", {
+      ann450K <- data.table::fread(urls$cpg_anno)
+      ann450K <- ann450K %>% mutate(UCSC_RefGene_Name = toupper(UCSC_RefGene_Name))
+      ann450K
+    })
   })
   
   # Reactive expression to wrap the marker set sample anno
   sample_anno <- reactive({
-    sample_anno <- data.table::fread(urls$train_anno)
-    sample_anno$Class <- as.factor(sample_anno$Class_rf)
-    sample_anno
+    cached("sample_anno", {
+      sample_anno <- data.table::fread(urls$train_anno)
+      sample_anno$Class <- as.factor(sample_anno$Class_rf)
+      sample_anno
+    })
   })
   
   # Reactive expression to wrap the marker beta matrix
@@ -913,8 +2681,9 @@ server <- function(input, output, session) {
       train_data <- training_data()
       
       
-      # Load reference beta matrix (row = CpGs, col = samples)
-      ref_beta <- ref_beta()
+      # (Self-hosting: the reference beta matrix (ref_beta()) is not used for
+      #  classification, so it is no longer loaded here; the gene heatmap
+      #  loads it when needed.)
       
       
       # prepare our imputation recipe exactly as in model development
@@ -959,8 +2728,8 @@ server <- function(input, output, session) {
         beta_mat_cpg_by_sample = beta_mat_cpg_by_sample,
         train_data   = train_data,
         prepped_rec  = prepped_rec,
-        rf_fit_path  = url(urls$model),
-        cal_path     = url(urls$cal_model),
+        rf_fit_path  = rds_src(urls$model),
+        cal_path     = rds_src(urls$cal_model),
         threshold    = 0.5,
         apply_reject = TRUE
       )
@@ -1004,7 +2773,12 @@ server <- function(input, output, session) {
         max_prob      = as.numeric(pred_df$cal_max_prob[1]),
         probabilities = probs,
         results       = results,
-        test_sample   = baked
+        # Exact baked matrix used by the classifier; retained for RF attribution.
+        test_sample   = baked,
+        # Retain the exact preprocessing object and feature set for explanation.
+        prepped_rec   = prepped_rec,
+        pred_df       = pred_df,
+        expected_cpgs = expected_cpgs
       )
       
     })
@@ -1084,6 +2858,191 @@ server <- function(input, output, session) {
       )
   })
   
+  
+  
+  # =============================================================================
+  # CNV PROFILING SERVER LOGIC
+  # =============================================================================
+  
+  output$cnv_input_summary <- renderUI({
+    tags$div(
+      style = "font-size: 0.95em; color:#555;",
+      tags$b("Current sample:"), " ", if (nzchar(input$sample_accession)) input$sample_accession else "not set",
+      tags$br(),
+      tags$b("Array:"), " ", if (!is.null(input$array_version)) input$array_version else "not set",
+      tags$br(),
+      tags$b("CNV reference:"), " ",
+      if (!is.null(input$array_version)) cnv_reference_label(input$array_version) else "not set"
+    )
+  })
+  
+  cnv_result <- eventReactive(input$run_cnv, {
+    req(input$sample_accession, input$array_version)
+    pre <- preprocessed_data()
+    req(pre, pre$mset_native)
+    sf <- sample_files()
+    req(sf)
+    
+    validate(
+      need(input$cnv_bin_size >= 10000, "CNV bin size must be at least 10,000 bp.")
+    )
+    
+    withProgress(
+      message = paste0("Running CNV profiling: ", input$sample_accession,
+                       " (", input$array_version, ")"),
+      value = 0,
+      {
+        # Each CNV step reports its absolute progress and a description here,
+        # and the same text is echoed to the R console.
+        cnv_progress <- function(value, detail) {
+          message("[CNV] ", detail)
+          setProgress(value = value, detail = detail)
+        }
+        
+        result <- tryCatch(
+          run_cnv_profile(
+            prefix = sf$prefix,
+            mset = pre$mset_native,
+            sample_id = input$sample_accession,
+            platform = input$array_version,
+            bin_size = as.integer(input$cnv_bin_size),
+            progress = cnv_progress
+          ),
+          error = function(e) {
+            showNotification(
+              paste("CNV profiling failed:", conditionMessage(e)),
+              type = "error",
+              duration = NULL
+            )
+            stop(e)
+          }
+        )
+        
+        setProgress(value = 1, detail = "Rendering CNV plot and tables…")
+        result
+      })
+  })   # no ignoreInit: actionButton's initial 0 is already ignored (ignoreNULL)
+  
+  output$cnv_results_ready <- reactive({
+    !is.null(tryCatch(cnv_result(), error = function(e) NULL))
+  })
+  outputOptions(output, "cnv_results_ready", suspendWhenHidden = FALSE)
+  
+  output$cnv_result_header <- renderUI({
+    res <- cnv_result()
+    req(res)
+    div(
+      style = "background:#f8f9fa; border-left:4px solid #0072B2; padding:12px 16px; margin-bottom:16px;",
+      tags$b("Sample: "), res$sample_id,
+      tags$span(" | "),
+      tags$b("Array: "), res$platform,
+      tags$span(" | "),
+      tags$b("Genome: "), res$genome,
+      tags$span(" | "),
+      tags$b("Reference: "), res$reference_label,
+      if (!is.null(res$reference_note)) tags$div(
+        style = "margin-top:6px; color:#D55E00;", icon("triangle-exclamation"), " ", res$reference_note
+      ),
+      tags$span(" | "),
+      tags$b("Bin size: "), format(res$bin_size, big.mark = ","), " bp",
+      tags$div(
+        style = "margin-top:6px;",
+        tags$b("Predicted sex: "), res$inferred_sex,
+        tags$span(style = "color:#6c757d; font-size:0.9em;")
+      )
+    )
+  })
+  
+  output$cnv_genome_plot <- renderPlot({
+    res <- cnv_result()
+    req(res)
+    cnv_draw_genomeplot(res)
+  })
+  
+  output$cnv_focal_table <- DT::renderDT({
+    res <- cnv_result()
+    req(res)
+    dat <- as.data.frame(res$alterations, check.names = FALSE)
+    
+    if (nrow(dat) == 0) {
+      dat <- data.frame(
+        Result = "No copy-number alterations detected.",
+        stringsAsFactors = FALSE
+      )
+      return(DT::datatable(dat, rownames = FALSE, options = list(dom = "t")))
+    }
+    
+    # Citations are kept for the download; the on-screen table stays compact.
+    show <- dat[, setdiff(names(dat), "Hotspot citations"), drop = FALSE]
+    # Natural sort so clicking the Chr / Alteration headers orders chr2 before
+    # chr10 and 2p before 10q (DataTables would otherwise sort as text).
+    natural_cols <- which(names(show) %in% c("Chr", "Alteration")) - 1L
+    DT::datatable(
+      show,
+      rownames = FALSE,
+      filter = "top",
+      plugins = "natural",
+      options = list(
+        pageLength = 15, scrollX = TRUE,
+        columnDefs = list(list(type = "natural", targets = natural_cols))
+      )
+    ) %>%
+      DT::formatStyle(
+        "Stem cell hotspot",
+        fontWeight = DT::styleEqual("No", "normal", default = "bold")
+      ) %>%
+      DT::formatStyle(
+        "CNV state",
+        color = DT::styleEqual(c("AMP", "GAIN", "HOMDEL", "LOSS"),
+                               c("#E17E49", "#E17E49", "#39379F", "#39379F"))
+      )
+  })
+  
+  output$download_cnv_plot <- downloadHandler(
+    filename = function() {
+      paste0(gsub("[^A-Za-z0-9._-]", "_", input$sample_accession), "_CNV_profile.pdf")
+    },
+    content = function(file) {
+      res <- cnv_result()
+      req(res)
+      grDevices::pdf(file, width = 18, height = 6)
+      on.exit(grDevices::dev.off(), add = TRUE)
+      cnv_draw_genomeplot(res)
+    }
+  )
+  
+  # Same fit as the labelled plot, without gene labels (as in the standalone script).
+  output$download_cnv_plot_unlabelled <- downloadHandler(
+    filename = function() {
+      paste0(gsub("[^A-Za-z0-9._-]", "_", input$sample_accession), "_CNV_profile_unlabelled.pdf")
+    },
+    content = function(file) {
+      res <- cnv_result()
+      req(res)
+      grDevices::pdf(file, width = 18, height = 6)
+      on.exit(grDevices::dev.off(), add = TRUE)
+      cnv_draw_genomeplot(res, detail = FALSE)
+    }
+  )
+  
+  # Same table as on screen plus the "Hotspot citations" column, which is hidden
+  # on screen to keep the table compact.
+  output$download_cnv_focal <- downloadHandler(
+    filename = function() {
+      paste0(gsub("[^A-Za-z0-9._-]", "_", input$sample_accession), "_CNV_alterations.tsv")
+    },
+    content = function(file) {
+      res <- cnv_result()
+      req(res)
+      utils::write.table(
+        as.data.frame(res$alterations, check.names = FALSE),
+        file = file,
+        sep = "\t",
+        row.names = FALSE,
+        quote = FALSE
+      )
+    }
+  )
   
   observeEvent(input$reset, {
     session$reload()
@@ -1467,9 +3426,9 @@ server <- function(input, output, session) {
           fill = Class == max_class
         )) +
           geom_col(width = 0.6) +
-          # cutoff line at 0.6
+          # cutoff line at 0.5
           geom_hline(
-            yintercept = 0.6,
+            yintercept = 0.5,
             linetype   = "dashed",
             color      = "#6c757d",
             size       = 0.8
@@ -1581,6 +3540,11 @@ server <- function(input, output, session) {
     }
   )
   
+  session$onSessionEnded(function() {
+    session_dir <- file.path(tempdir(), paste0("stemclass_", session$token))
+    if (dir.exists(session_dir)) unlink(session_dir, recursive = TRUE, force = TRUE)
+  })
+  
   output$download_gene_heatmap <- downloadHandler(
     filename = function() {
       paste0("gene_heatmap_", toupper(input$gene_input), "_",
@@ -1610,14 +3574,3 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui = ui, server = server)
-
-
-
-
-
-
-
-
-
-
-

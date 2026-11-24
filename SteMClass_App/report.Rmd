@@ -2,7 +2,8 @@
 title: "Sample Classification Report"
 output:
   html_document:
-    theme: !expr bslib::bs_theme(bootswatch="flatly", primary="#0072B2", base_font=bslib::font_google("Roboto"))
+        theme: !expr if (nzchar(Sys.getenv("STEMCLASS_DATA_DIR"))) bslib::bs_theme(bootswatch="flatly", primary="#0072B2", base_font=bslib::font_collection("Roboto", "Helvetica Neue", "Arial", "sans-serif")) else
+        bslib::bs_theme(bootswatch="flatly", primary="#0072B2", base_font=bslib::font_google("Roboto"))
     df_print: paged
 params:
   class_text: NULL
